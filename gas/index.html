@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>音の記憶リレー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;800&family=Zen+Kaku+Gothic+New:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --glass: rgba(255, 255, 255, .055);
+    --glass-hi: rgba(255, 255, 255, .1);
+    --line: rgba(255, 255, 255, .12);
+    --fg: #eef2ff;
+    --muted: #97a3c4;
+    --accent: #8aa4ff;
+    --accent-2: #c08bff;
+    /* ボタンの色(色覚の違いがあっても区別しやすい系統+番号つき) */
+    --c0: #2f8cff;
+    --c1: #ff6a1f;
+    --c2: #12c69a;
+    --c3: #e46fc4;
+    --num: "Outfit", "Zen Kaku Gothic New", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    color: var(--fg);
+    font-family: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    background:
+      radial-gradient(110% 70% at 0% 0%, rgba(58, 86, 190, .45) 0%, transparent 55%),
+      radial-gradient(90% 60% at 100% 100%, rgba(140, 60, 200, .38) 0%, transparent 55%),
+      var(--bg);
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 3px solid #ffd54a; outline-offset: 3px; }
+  .sr {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  [hidden] { display: none !important; }
+
+  /* ===== 全体:画面の高さにぴったり収める ===== */
+  .app {
+    height: 100vh;
+    height: 100dvh;
+    max-width: 560px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: max(14px, env(safe-area-inset-top)) 16px max(14px, env(safe-area-inset-bottom));
+  }
+  #room { display: contents; }
+
+  /* ===== ロビー ===== */
+  .lobby {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 22px;
+    padding: 8px 2px;
+  }
+  .brand { text-align: center; }
+  .logo {
+    display: inline-grid;
+    grid-template-columns: repeat(2, 22px);
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  .logo i {
+    width: 22px; height: 22px; border-radius: 7px;
+    animation: blink 3.2s infinite;
+  }
+  .logo i:nth-child(1) { background: var(--c0); box-shadow: 0 0 18px var(--c0); }
+  .logo i:nth-child(2) { background: var(--c1); box-shadow: 0 0 18px var(--c1); animation-delay: .8s; }
+  .logo i:nth-child(3) { background: var(--c2); box-shadow: 0 0 18px var(--c2); animation-delay: 1.6s; }
+  .logo i:nth-child(4) { background: var(--c3); box-shadow: 0 0 18px var(--c3); animation-delay: 2.4s; }
+  @keyframes blink {
+    0%, 70%, 100% { opacity: .35; transform: scale(.9); }
+    10% { opacity: 1; transform: scale(1.05); }
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(1.7rem, 7vw, 2.2rem);
+    font-weight: 700;
+    letter-spacing: .04em;
+    background: linear-gradient(90deg, #fff, #c9d4ff 55%, #e2c6ff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .tagline { margin: 4px 0 0; color: var(--muted); letter-spacing: .12em; font-size: .9rem; }
+
+  .panel {
+    background: var(--glass);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 18px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .field-label {
+    display: block;
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin: 0 0 6px 4px;
+  }
+  .input {
+    width: 100%;
+    padding: 13px 16px;
+    font-size: 1.05rem;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: rgba(0, 0, 0, .28);
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(138, 164, 255, .2); }
+  .input.code {
+    font-family: var(--num);
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: .35em;
+    text-align: center;
+  }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px 18px;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: var(--glass-hi);
+    font-weight: 700;
+    font-size: 1.02rem;
+    letter-spacing: .04em;
+    transition: transform .1s, filter .15s, opacity .15s;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn.primary {
+    border: none;
+    color: #0b0e1a;
+    background: linear-gradient(100deg, var(--accent), var(--accent-2));
+    box-shadow: 0 10px 28px -10px rgba(160, 140, 255, .9);
+  }
+  .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+  .mt { margin-top: 10px; }
+  .divider {
+    display: flex; align-items: center; gap: 10px;
+    margin: 16px 0; color: var(--muted); font-size: .8rem; letter-spacing: .1em;
+  }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .join-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+  .join-row .btn { width: auto; padding-inline: 20px; }
+
+  /* 読み上げ切り替えスイッチ */
+  .switch {
+    display: flex; gap: 12px; align-items: flex-start;
+    margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .switch input {
+    appearance: none; -webkit-appearance: none;
+    flex: none; width: 46px; height: 26px; margin: 2px 0 0;
+    border-radius: 99px; background: rgba(255, 255, 255, .18);
+    position: relative; cursor: pointer; transition: background .2s;
+  }
+  .switch input::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 20px; height: 20px; border-radius: 50%; background: #fff;
+    transition: transform .2s;
+  }
+  .switch input:checked { background: linear-gradient(100deg, var(--accent), var(--accent-2)); }
+  .switch input:checked::after { transform: translateX(20px); }
+  .switch b { display: block; font-size: .95rem; }
+  .switch small { display: block; color: var(--muted); font-size: .78rem; line-height: 1.45; margin-top: 2px; }
+
+  /* ===== ステータス(読み上げ内容) ===== */
+  #status {
+    order: 2;
+    margin: 0;
+    min-height: 3.3em;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 16px;
+    background: var(--glass);
+    border: 1px solid var(--line);
+    font-weight: 700;
+    font-size: .98rem;
+    line-height: 1.45;
+  }
+  #status::before {
+    content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 12px var(--accent);
+  }
+  .app.my-turn #status {
+    border-color: rgba(138, 164, 255, .7);
+    box-shadow: 0 0 0 1px rgba(138, 164, 255, .35), 0 0 30px -6px rgba(138, 164, 255, .8);
+  }
+  .app.my-turn #status::before { animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { transform: scale(1.6); opacity: .5; } }
+
+  /* ===== 部屋の画面 ===== */
+  .topbar { order: 0; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+  .label {
+    display: block; font-size: .7rem; font-weight: 700; letter-spacing: .18em; color: var(--muted);
+  }
+  #roomH { margin: 0; outline-offset: 4px; }
+  #codeText {
+    font-family: var(--num); font-weight: 800; font-size: 1.9rem; letter-spacing: .14em; line-height: 1.1;
+  }
+  .stat { text-align: right; }
+  #countText {
+    font-family: var(--num); font-weight: 800; font-size: 1.9rem; line-height: 1.1;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+
+  .players {
+    order: 1; list-style: none; margin: 0; padding: 0;
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 99px;
+    background: var(--glass); border: 1px solid var(--line);
+    font-size: .88rem; font-weight: 700;
+    transition: all .2s;
+  }
+  .chip .tag {
+    font-size: .66rem; font-weight: 700; letter-spacing: .05em;
+    padding: 1px 7px; border-radius: 99px;
+    background: rgba(255, 255, 255, .1); color: var(--muted);
+  }
+  .chip.is-me { border-color: rgba(255, 255, 255, .35); }
+  .chip.is-turn {
+    background: linear-gradient(100deg, var(--accent), var(--accent-2));
+    color: #0b0e1a; border-color: transparent;
+    box-shadow: 0 0 22px -4px rgba(160, 140, 255, .9);
+  }
+  .chip.is-turn .tag { background: rgba(0, 0, 0, .15); color: #0b0e1a; }
+  .chip.is-turn::before { content: "▶"; font-size: .7rem; }
+  .chip.is-out { opacity: .42; text-decoration: line-through; }
+  .chip.is-win {
+    background: linear-gradient(100deg, #ffd54a, #ff9d4a); color: #1a1205; border-color: transparent;
+    box-shadow: 0 0 24px -4px rgba(255, 200, 80, .9);
+  }
+  .chip.is-win::before { content: "★"; }
+
+  /* 何個押したかのドット */
+  .dots {
+    order: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+    min-height: 12px; padding: 0 4px;
+  }
+  .dots i { width: 10px; height: 10px; border-radius: 50%; background: rgba(255, 255, 255, .16); transition: background .15s, box-shadow .15s; }
+  .dots i.on { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .dots i.add { background: transparent; border: 1.5px dashed rgba(255, 255, 255, .5); }
+  .dots b { font-family: var(--num); font-size: .75rem; color: var(--muted); margin-left: 2px; }
+
+  #startBtn { order: 4; padding: 13px; font-size: 1.05rem; }
+
+  /* ===== 4つのボタン ===== */
+  #padH { margin: 0; }
+  .pad {
+    order: 5;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 12px;
+  }
+  .pad button {
+    --c: var(--c0);
+    position: relative;
+    min-height: 0;
+    border: 1px solid rgba(255, 255, 255, .2);
+    border-radius: 24px;
+    color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    background:
+      radial-gradient(120% 90% at 30% 15%, rgba(255, 255, 255, .28), transparent 50%),
+      linear-gradient(150deg, var(--c), color-mix(in srgb, var(--c) 55%, #000));
+    box-shadow: 0 14px 34px -14px var(--c), inset 0 1px 0 rgba(255, 255, 255, .35);
+    transition: transform .09s, filter .12s, box-shadow .15s, opacity .25s;
+    touch-action: manipulation;
+    overflow: hidden;
+  }
+  .pad .b1 { --c: var(--c1); }
+  .pad .b2 { --c: var(--c2); }
+  .pad .b3 { --c: var(--c3); }
+  .pad .num {
+    font-family: var(--num); font-weight: 800;
+    font-size: clamp(2.2rem, 9vh, 4.6rem); line-height: 1;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, .25);
+  }
+  .pad .note { font-size: clamp(.8rem, 2.2vh, 1rem); font-weight: 700; letter-spacing: .1em; opacity: .9; }
+  .pad button:active { transform: scale(.96); }
+  .pad button.lit {
+    transform: scale(.95);
+    filter: brightness(1.35) saturate(1.1);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, .9), 0 0 55px 6px var(--c);
+  }
+  .app.is-playing:not(.my-turn) .pad button { opacity: .55; }
+  .app.my-turn .pad button { box-shadow: 0 0 0 2px rgba(255, 255, 255, .35), 0 16px 40px -12px var(--c); }
+
+  .pad-hint { order: 6; margin: -2px 0 0; text-align: center; font-size: .74rem; color: var(--muted); letter-spacing: .04em; }
+
+  /* ===== 下の操作バー ===== */
+  .toolbar {
+    order: 7;
+    display: flex; gap: 6px;
+    padding: 6px;
+    border-radius: 18px;
+    background: var(--glass);
+    border: 1px solid var(--line);
+  }
+  .tool {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 7px 4px;
+    border: none; border-radius: 13px; background: transparent;
+    font-size: .72rem; font-weight: 700; color: var(--muted); white-space: nowrap;
+    transition: background .15s, color .15s;
+  }
+  .tool svg { width: 22px; height: 22px; }
+  .tool:hover, .tool:focus-visible { background: var(--glass-hi); color: var(--fg); }
+  .tool.danger:hover { color: #ff8a8a; }
+  .tool[aria-pressed="true"] { color: var(--accent); }
+  .tool[aria-pressed="false"] svg { opacity: .45; }
+
+  /* 横向き・背の低い画面:ボタンを横一列に */
+  @media (max-height: 520px) and (orientation: landscape) {
+    .app { max-width: 900px; gap: 8px; }
+    .pad { grid-template-columns: repeat(4, 1fr); grid-template-rows: 1fr; }
+    .pad-hint { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <p id="status" aria-live="off">名前を入れて、部屋を作るか、部屋番号で参加してください。</p>
+
+  <!-- ===== 最初の画面 ===== -->
+  <section id="lobby" class="lobby" aria-labelledby="titleH">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <h1 id="titleH">音の記憶リレー</h1>
+      <p class="tagline">聞いて、覚えて、つなぐ。</p>
+    </div>
+
+    <div class="panel">
+      <button class="btn primary" id="resumeBtn" hidden>前の部屋に戻る</button>
+      <div class="divider" id="resumeDivider" aria-hidden="true" hidden>または新しく</div>
+
+      <label class="field-label" for="nameInput">あなたの名前(空でもOK)</label>
+      <input class="input" type="text" id="nameInput" maxlength="12" autocomplete="nickname">
+      <button class="btn primary mt" id="createBtn">部屋を作る</button>
+
+      <div class="divider" aria-hidden="true">または</div>
+
+      <label class="field-label" for="codeInput">部屋番号(4桁)</label>
+      <div class="join-row">
+        <input class="input code" type="text" id="codeInput" inputmode="numeric" maxlength="4" autocomplete="off">
+        <button class="btn" id="joinBtn">参加</button>
+      </div>
+
+      <label class="switch">
+        <input type="checkbox" id="ttsToggle" checked>
+        <span>
+          <b>音声合成で読み上げる</b>
+          <small>VoiceOver・TalkBack・NVDAなどを使う人はオフに。スクリーンリーダーが読み上げます。</small>
+        </span>
+      </label>
+    </div>
+  </section>
+
+  <!-- ===== 部屋の画面 ===== -->
+  <section id="room" hidden aria-labelledby="roomH">
+    <header class="topbar">
+      <div>
+        <span class="label" aria-hidden="true">ROOM</span>
+        <h2 id="roomH" tabindex="-1"><span class="sr">部屋番号 </span><span id="codeText"></span></h2>
+      </div>
+      <div class="stat" aria-hidden="true">
+        <span class="label">覚える数</span>
+        <span id="countText">0</span>
+      </div>
+    </header>
+
+    <p id="turnInfo" class="sr"></p>
+    <ul id="playerList" class="players" aria-label="参加者"></ul>
+
+    <div id="dots" class="dots" aria-hidden="true"></div>
+
+    <button class="btn primary" id="startBtn" hidden>ゲーム開始</button>
+
+    <h2 id="padH" class="sr">ボタン</h2>
+    <div class="pad" role="group" aria-labelledby="padH">
+      <button class="b0" data-b="0" aria-label="1 ド"><span class="num" aria-hidden="true">1</span><span class="note" aria-hidden="true">ド</span></button>
+      <button class="b1" data-b="1" aria-label="2 ミ"><span class="num" aria-hidden="true">2</span><span class="note" aria-hidden="true">ミ</span></button>
+      <button class="b2" data-b="2" aria-label="3 ソ"><span class="num" aria-hidden="true">3</span><span class="note" aria-hidden="true">ソ</span></button>
+      <button class="b3" data-b="3" aria-label="4 高いド"><span class="num" aria-hidden="true">4</span><span class="note" aria-hidden="true">高いド</span></button>
+    </div>
+    <p class="pad-hint">1〜4キーでも押せます ・ 自分の番以外は練習</p>
+
+    <nav class="toolbar" aria-label="操作">
+      <button class="tool" id="repeatBtn" aria-label="状況を聞く">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+        <span>状況</span>
+      </button>
+      <button class="tool" id="bgmBtn" aria-pressed="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        <span>BGM</span>
+      </button>
+      <button class="tool" id="skipBtn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 5 10 7-10 7V5z"/><path d="M19 5v14"/></svg>
+        <span>スキップ</span>
+      </button>
+      <button class="tool" id="lobbyBtn" aria-label="待機に戻す" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+        <span>待機</span>
+      </button>
+      <button class="tool danger" id="leaveBtn" aria-label="退出(部屋を出る)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+        <span>退出</span>
+      </button>
+    </nav>
+  </section>
+</div>
+
+<script>
+  // ============================================================
+  // 設定
+  // ============================================================
+  const NOTE_NAMES = ['ド', 'ミ', 'ソ', '高いド'];
+  const FREQS = [261.63, 329.63, 392.0, 523.25];
+  const POLL_MS = 1000;
+  const MAX_DOTS = 24;
+
+  const $ = (id) => document.getElementById(id);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // ============================================================
+  // 状態
+  // ============================================================
+  let code = null;        // 部屋番号
+  let myId = null;        // 自分のプレイヤーID
+  let state = null;       // サーバーから来た最新の部屋の状態
+  let lastEventId = 0;    // 処理済みのイベントID
+  let myTurnActive = false;
+  let myPos = 0;          // 自分の番で何個押したか
+  let localMissed = false;
+  let pollTimer = null;
+  let away = [];          // 離席中(しばらく通信がない)人のID
+  let pendingPresses = [];// まだ送っていないボタン
+  let pendingStart = 0;   // pendingPresses[0] が何個目か
+  let sending = false;    // 送信中かどうか
+  let syncEpoch = 0;      // 通信がずれたら増やして、古い送信の結果を捨てる
+  let skipArmedUntil = 0; // スキップの「もう一度押して決定」の期限
+  let skipTarget = null;  // スキップしようとしている人
+  const eventQueue = [];
+  let queueRunning = false;
+
+  // ============================================================
+  // サーバー呼び出し
+  // ============================================================
+  function call(fn, ...args) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)[fn](...args);
+    });
+  }
+
+  function errMsg(e) {
+    const m = (e && e.message) ? e.message : String(e || '');
+    return m.replace(/^(Exception|Error):\s*/, '') || '通信エラーが起きました。';
+  }
+
+  // ============================================================
+  // 読み上げ
+  // ============================================================
+  let jaVoice = null;
+  function pickVoice() {
+    if (!('speechSynthesis' in window)) return;
+    jaVoice = speechSynthesis.getVoices().find((v) => /^ja/i.test(v.lang)) || null;
+  }
+  if ('speechSynthesis' in window) {
+    pickVoice();
+    speechSynthesis.onvoiceschanged = pickVoice;
+  }
+
+  function ttsOn() {
+    return $('ttsToggle').checked && ('speechSynthesis' in window);
+  }
+
+  // 音声合成を使うときは画面の文字を aria-live にしない(二重に読まれるため)
+  function updateLiveMode() {
+    $('status').setAttribute('aria-live', ttsOn() ? 'off' : 'polite');
+  }
+
+  // 同じ文が続いてもスクリーンリーダーが読み飛ばさないよう、見えない文字を交互につける
+  let statusFlip = false;
+  function showStatus(text) {
+    statusFlip = !statusFlip;
+    $('status').textContent = text + (statusFlip ? '​' : '');
+  }
+
+  /** 読み上げて、終わったら解決する Promise を返す。 */
+  function speakAsync(text) {
+    showStatus(text);
+    if (!ttsOn()) {
+      // スクリーンリーダーが読み終わるくらいの間をあける
+      return wait(Math.max(900, text.length * 110));
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      speakingCount++;
+      bgmRestore();
+      const finish = () => {
+        if (done) return;
+        done = true;
+        speakingCount = Math.max(0, speakingCount - 1);
+        bgmRestore();
+        resolve();
+      };
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ja-JP';
+      if (jaVoice) u.voice = jaVoice;
+      u.rate = 1.1;
+      u.onend = finish;
+      u.onerror = finish;
+      speechSynthesis.speak(u);
+      setTimeout(finish, Math.max(2500, text.length * 250)); // onend が来ない端末対策
+    });
+  }
+
+  function say(text) { speakAsync(text); }
+
+  // ============================================================
+  // 音
+  // ============================================================
+  let audioCtx = null;
+
+  // スマホは「ユーザーが押したとき」に一度鳴らさないと音が出ないので、その準備
+  function unlockAudio() {
+    try {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) { /* 音が出せない環境でもゲームは続ける */ }
+  }
+
+  function unlockSpeech() {
+    if (!ttsOn()) return;
+    try {
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0;
+      speechSynthesis.speak(u);
+    } catch (e) { /* 何もしない */ }
+  }
+
+  function tone(freq, dur, type, vol, delay) {
+    if (!audioCtx) return;
+    const t = audioCtx.currentTime + (delay || 0);
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + dur + 0.05);
+  }
+
+  function flash(i) {
+    const b = document.querySelector(`.pad button[data-b="${i}"]`);
+    if (!b) return;
+    b.classList.add('lit');
+    setTimeout(() => b.classList.remove('lit'), 260);
+  }
+
+  // ============================================================
+  // BGM(Web Audio で作るオリジナル曲)
+  // ゲームの音(ド〜高いド:262〜523Hz)とかぶらないよう、それより低い音域の和音だけで作る。
+  // Am → F → C → G をゆっくりくり返す、やわらかいパッドの音。
+  // ============================================================
+  const BGM_VOL = 0.05;
+  const BGM_BAR = 4.0; // 1つの和音の長さ(秒)
+  const BGM_CHORDS = [
+    [110.00, 130.81, 164.81], // Am(ラ・ド・ミ)
+    [87.31, 110.00, 130.81],  // F (ファ・ラ・ド)
+    [98.00, 130.81, 164.81],  // C (ソ・ド・ミ)
+    [98.00, 123.47, 146.83]   // G (ソ・シ・レ)
+  ];
+  let bgmOn = true;
+  let bgmGain = null, bgmTimer = null, bgmNextTime = 0, bgmStep = 0;
+  let speakingCount = 0, duckTimer = null;
+  try { if (localStorage.getItem('otoRelayBgm') === '0') bgmOn = false; } catch (e) {}
+
+  function bgmEnsure() {
+    if (!audioCtx || bgmGain) return;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 800;
+    bgmGain = audioCtx.createGain();
+    bgmGain.gain.value = 0;
+    filter.connect(bgmGain).connect(audioCtx.destination);
+    bgmGain._in = filter;
+  }
+
+  function bgmLevel() { return (speakingCount > 0) ? BGM_VOL * 0.35 : BGM_VOL; }
+
+  function bgmStart() {
+    if (!bgmOn || !audioCtx || bgmTimer) return;
+    bgmEnsure();
+    const t = audioCtx.currentTime;
+    bgmGain.gain.cancelScheduledValues(t);
+    bgmGain.gain.setTargetAtTime(bgmLevel(), t, 1.0); // ふわっと始める
+    bgmNextTime = t + 0.1;
+    bgmTimer = setInterval(bgmSchedule, 250);
+    bgmSchedule();
+  }
+
+  function bgmStop() {
+    if (!bgmTimer) return;
+    clearInterval(bgmTimer);
+    bgmTimer = null;
+    const t = audioCtx.currentTime;
+    bgmGain.gain.cancelScheduledValues(t);
+    bgmGain.gain.setTargetAtTime(0, t, 0.4);
+  }
+
+  /** 少し先までの和音を予約する(タブが裏に回って遅れたら今から再開)。 */
+  function bgmSchedule() {
+    if (!audioCtx) return;
+    if (bgmNextTime < audioCtx.currentTime) bgmNextTime = audioCtx.currentTime + 0.05;
+    while (bgmNextTime < audioCtx.currentTime + 1.0) {
+      bgmChord(BGM_CHORDS[bgmStep % BGM_CHORDS.length], bgmNextTime);
+      bgmNextTime += BGM_BAR;
+      bgmStep++;
+    }
+  }
+
+  function bgmChord(freqs, t) {
+    const end = t + BGM_BAR + 1.5; // 次の和音と少し重ねてなめらかにつなぐ
+    freqs.forEach((f, idx) => {
+      [-5, 5].forEach((cents) => { // 2つを少しずらして重ね、広がりのある音にする
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = f;
+        osc.detune.value = cents;
+        const peak = idx === 0 ? 0.32 : 0.22;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(peak, t + 1.2);
+        g.gain.setValueAtTime(peak, t + BGM_BAR - 0.3);
+        g.gain.linearRampToValueAtTime(0.0001, end);
+        osc.connect(g).connect(bgmGain._in);
+        osc.start(t);
+        osc.stop(end + 0.05);
+      });
+    });
+    // 一番下の音をもう1オクターブ下で鳴らして、土台をつくる
+    const sub = audioCtx.createOscillator();
+    const sg = audioCtx.createGain();
+    sub.type = 'sine';
+    sub.frequency.value = freqs[0] / 2;
+    sg.gain.setValueAtTime(0.0001, t);
+    sg.gain.linearRampToValueAtTime(0.35, t + 0.8);
+    sg.gain.linearRampToValueAtTime(0.0001, end);
+    sub.connect(sg).connect(bgmGain._in);
+    sub.start(t);
+    sub.stop(end + 0.05);
+  }
+
+  /** ゲームの音や読み上げの間だけ、BGMを小さくする。 */
+  function bgmDuck(ms) {
+    if (!bgmGain || !bgmTimer) return;
+    const t = audioCtx.currentTime;
+    bgmGain.gain.cancelScheduledValues(t);
+    bgmGain.gain.setTargetAtTime(BGM_VOL * 0.3, t, 0.04);
+    clearTimeout(duckTimer);
+    duckTimer = setTimeout(bgmRestore, ms);
+  }
+  function bgmRestore() {
+    if (!bgmGain || !bgmTimer) return;
+    bgmGain.gain.setTargetAtTime(bgmLevel(), audioCtx.currentTime, 0.5);
+  }
+
+  function updateBgmBtn() {
+    $('bgmBtn').setAttribute('aria-pressed', bgmOn ? 'true' : 'false');
+  }
+
+  function playButton(i) { bgmDuck(900); tone(FREQS[i], 0.4, 'triangle', 0.35); flash(i); }
+  function playMiss() { tone(146.8, 0.25, 'sawtooth', 0.2); tone(110, 0.45, 'sawtooth', 0.2, 0.22); }
+  function playChime() { tone(880, 0.15, 'sine', 0.25); tone(1318.5, 0.25, 'sine', 0.25, 0.15); }
+  function playWin() {
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, k) => tone(f, 0.3, 'triangle', 0.3, k * 0.15));
+  }
+
+  // ============================================================
+  // 便利関数
+  // ============================================================
+  function nameOf(id) {
+    if (!state) return '誰か';
+    const p = state.players.find((q) => q.id === id);
+    return p ? p.name : '誰か';
+  }
+  function san(id) { return id === myId ? 'あなた' : nameOf(id) + 'さん'; }
+  function currentId() {
+    if (!state || state.status !== 'playing') return null;
+    const p = state.players[state.turnIndex];
+    return p ? p.id : null;
+  }
+  function isHost() { return !!state && state.hostId === myId; }
+  function digits(c) { return String(c).split('').join(' '); } // 「1 2 3 4」と1文字ずつ読ませる
+
+  // ============================================================
+  // 部屋に入る/出る
+  // ============================================================
+  // ============================================================
+  // 画面を閉じても戻れるように、部屋番号とプレイヤーIDを端末に保存する
+  // ============================================================
+  const SESSION_KEY = 'otoRelaySession';
+  function saveSession() {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ code: code, playerId: myId })); } catch (e) {}
+  }
+  function clearSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    $('resumeBtn').hidden = true;
+    $('resumeDivider').hidden = true;
+  }
+  function loadSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
+  }
+
+  function enterRoom(res) {
+    myId = res.playerId;
+    state = res.state;
+    code = state.code;
+    lastEventId = state.nextEventId; // 入る前のイベントは読み上げない
+    away = res.away || [];
+    myTurnActive = false;
+    localMissed = false;
+    pendingPresses = [];
+    // 戻ってきたときに自分の番の途中なら、続きから押せるようにする
+    if (currentId() === myId) {
+      myTurnActive = true;
+      myPos = state.inputPos;
+    }
+    saveSession();
+    $('lobby').hidden = true;
+    $('room').hidden = false;
+    render();
+    $('roomH').focus();
+    bgmStart();
+    schedulePoll(POLL_MS);
+  }
+
+  function resetLocal() {
+    clearTimeout(pollTimer);
+    code = null; myId = null; state = null;
+    eventQueue.length = 0;
+    myTurnActive = false;
+    pendingPresses = [];
+    away = [];
+    bgmStop();
+    speakingCount = 0;
+    if ('speechSynthesis' in window) speechSynthesis.cancel(); // 前の部屋の読み上げを止める
+    $('room').hidden = true;
+    $('lobby').hidden = false;
+    $('app').classList.remove('is-playing', 'my-turn');
+    $('createBtn').focus();
+  }
+
+  function setBusy(busy) {
+    $('createBtn').disabled = busy;
+    $('joinBtn').disabled = busy;
+    $('resumeBtn').disabled = busy;
+  }
+
+  $('createBtn').addEventListener('click', async () => {
+    unlockAudio(); unlockSpeech();
+    setBusy(true);
+    showStatus('部屋を作っています…');
+    try {
+      const res = await call('createRoom', $('nameInput').value);
+      enterRoom(res);
+      say(`部屋を作りました。部屋番号は ${digits(code)} です。みんなに伝えてください。`);
+    } catch (e) {
+      say(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  $('joinBtn').addEventListener('click', async () => {
+    unlockAudio(); unlockSpeech();
+    const c = $('codeInput').value;
+    setBusy(true);
+    showStatus('参加しています…');
+    try {
+      const res = await call('joinRoom', c, $('nameInput').value);
+      enterRoom(res);
+      say(`部屋番号 ${digits(code)} に参加しました。いま${state.players.length}人です。ホストが始めるのを待ってください。`);
+    } catch (e) {
+      say(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  $('resumeBtn').addEventListener('click', async () => {
+    unlockAudio(); unlockSpeech();
+    const saved = loadSession();
+    if (!saved) { clearSession(); return; }
+    setBusy(true);
+    showStatus('前の部屋に戻っています…');
+    try {
+      const res = await call('resumeRoom', saved.code, saved.playerId);
+      enterRoom(res);
+      if (myTurnActive) {
+        say(`部屋に戻りました。あなたの番の途中です。${myPos + 1}個目から押してください。`);
+      } else {
+        say(`部屋番号 ${digits(code)} に戻りました。${describe()}`);
+      }
+    } catch (e) {
+      clearSession();
+      say(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  // 部屋番号の欄で Enter を押したら参加
+  $('codeInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('joinBtn').click();
+  });
+
+  $('leaveBtn').addEventListener('click', async () => {
+    const c = code, id = myId;
+    clearSession();
+    resetLocal();
+    say('部屋を出ました。');
+    try { await call('leaveRoom', c, id); } catch (e) { /* 出るだけなので無視 */ }
+  });
+
+  $('startBtn').addEventListener('click', async () => {
+    unlockAudio();
+    try {
+      const r = await call('startGame', code, myId);
+      applyState(r.state);
+    } catch (e) { say(errMsg(e)); }
+  });
+
+  // 確認ダイアログは GAS の画面で出ないことがあるので、「もう一度押して決定」にする
+  $('skipBtn').addEventListener('click', async () => {
+    const now = Date.now();
+    const target = currentId();
+    // 1回目、または1回目のあとに番が変わったら、改めて確認する
+    if (now > skipArmedUntil || skipTarget !== target) {
+      skipArmedUntil = now + 4000;
+      skipTarget = target;
+      say(`${nameOf(target)}さんをスキップします。4秒以内にもう一度押すと決定です。`);
+      return;
+    }
+    skipArmedUntil = 0;
+    try {
+      const r = await call('skipCurrent', code, myId, target);
+      applyState(r.state);
+      if (r.error === 'turn_changed') say('番が変わったので、スキップを取りやめました。');
+    } catch (e) { say(errMsg(e)); }
+  });
+
+  $('lobbyBtn').addEventListener('click', async () => {
+    try {
+      const r = await call('backToLobby', code, myId);
+      applyState(r.state);
+    } catch (e) { say(errMsg(e)); }
+  });
+
+  $('bgmBtn').addEventListener('click', () => {
+    unlockAudio();
+    bgmOn = !bgmOn;
+    try { localStorage.setItem('otoRelayBgm', bgmOn ? '1' : '0'); } catch (e) {}
+    updateBgmBtn();
+    if (bgmOn) bgmStart(); else bgmStop();
+    say(bgmOn ? 'BGMをオンにしました。' : 'BGMをオフにしました。');
+  });
+
+  $('repeatBtn').addEventListener('click', () => {
+    if (ttsOn()) speechSynthesis.cancel();
+    say(describe());
+  });
+
+  $('ttsToggle').addEventListener('change', () => {
+    updateLiveMode();
+    try { localStorage.setItem('otoRelayTts', $('ttsToggle').checked ? '1' : '0'); } catch (e) {}
+  });
+
+  // ============================================================
+  // ポーリング(1秒ごとに状態を見にいく)
+  // ============================================================
+  function schedulePoll(ms) {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, ms);
+  }
+
+  async function poll() {
+    if (!code) return;
+    const c = code;
+    try {
+      const r = await call('getState', c, state ? state.version : -1, myId);
+      if (code !== c) return;
+      if (r.gone) {
+        clearSession();
+        resetLocal();
+        await speakAsync('部屋がなくなりました。最初の画面に戻ります。');
+        return;
+      }
+      setAway(r.away);
+      if (r.changed) applyState(r.state);
+    } catch (e) {
+      // 一時的な通信エラーは次のポーリングで回復させる
+    }
+    if (code === c) schedulePoll(POLL_MS);
+  }
+
+  function setAway(list) {
+    const next = list || [];
+    if (next.join() === away.join()) return;
+    away = next;
+    render();
+  }
+
+  function applyState(s) {
+    if (!s || !code || s.code !== code) return;
+    if (state && s.version <= state.version) return; // 古い状態は無視
+    state = s;
+    const fresh = s.events.filter((e) => e.id > lastEventId);
+    if (fresh.length) lastEventId = fresh[fresh.length - 1].id;
+    fresh.forEach((e) => eventQueue.push(e));
+    runQueue();
+    render();
+  }
+
+  // ============================================================
+  // イベントを順番に鳴らす・読み上げる
+  // ============================================================
+  async function runQueue() {
+    if (queueRunning) return;
+    queueRunning = true;
+    while (eventQueue.length) {
+      const e = eventQueue.shift();
+      try { await handleEvent(e); } catch (err) { console.error(err); }
+    }
+    queueRunning = false;
+  }
+
+  async function handleEvent(e) {
+    switch (e.type) {
+      case 'join':
+        if (e.player !== myId) {
+          // 名前と人数はイベントに入っている値を使う(まとめて届いても正しく読むため)
+          await speakAsync(`${e.name || nameOf(e.player)}さんが参加しました。いま${e.count || state.players.length}人です。`);
+        }
+        break;
+
+      case 'leave':
+        if (e.player !== myId) await speakAsync(`${e.name}さんが部屋を出ました。`);
+        break;
+
+      case 'start':
+        playChime();
+        await speakAsync('ゲーム開始!');
+        break;
+
+      case 'press':
+        if (e.player === myId) break; // 自分の音は押したときに鳴らしている
+        playButton(e.button);
+        await wait(500);
+        break;
+
+      case 'miss': {
+        const me = e.player === myId;
+        if (!(me && localMissed)) playMiss();
+        if (me) localMissed = false;
+        await wait(600);
+        if (e.reason === 'skip') {
+          await speakAsync(`${san(e.player)}はスキップされて脱落です。`);
+          break;
+        }
+        await speakAsync(me ? '間違えました。あなたは脱落です。' : `${nameOf(e.player)}さん、間違えて脱落です。`);
+        if (typeof e.expected === 'number') {
+          await speakAsync(`正しくは、${e.expected + 1}番の${NOTE_NAMES[e.expected]}でした。`);
+          playButton(e.expected);
+          await wait(500);
+        }
+        break;
+      }
+
+      case 'turn':
+        if (e.player === myId) {
+          // 最新の状態でもまだ自分の番なら、押せるようにする
+          if (currentId() === myId && state.turnSerial === e.serial) {
+            myTurnActive = true;
+            myPos = 0;
+            localMissed = false;
+            pendingPresses = [];
+            render();
+            playChime();
+            await wait(350);
+            await speakAsync(e.length === 0
+              ? 'あなたの番です。好きなボタンを1つ押してください。'
+              : `あなたの番です。${e.length}個の音を順番に押して、最後に1つ足してください。`);
+          }
+        } else {
+          await speakAsync(`${nameOf(e.player)}さんの番です。${e.length}個。`);
+        }
+        break;
+
+      case 'win':
+        playWin();
+        await wait(700);
+        await speakAsync(e.player
+          ? `${e.player === myId ? 'あなた' : (e.name || nameOf(e.player)) + 'さん'}の勝ち!${e.length}個まで続きました。`
+          : 'ゲーム終了です。');
+        if (isHost()) await speakAsync('もう一度遊ぶときは、ゲーム開始を押してください。');
+        break;
+
+      case 'reset':
+        await speakAsync('待機中に戻りました。ホストがゲーム開始を押すと始まります。');
+        break;
+    }
+  }
+
+  // ============================================================
+  // ボタンを押したとき
+  // ============================================================
+  function onPad(i) {
+    unlockAudio();
+    playButton(i);
+
+    // 自分の番じゃないときは練習(音だけ)
+    if (!state || state.status !== 'playing' || !myTurnActive || currentId() !== myId) return;
+
+    const seq = state.sequence;
+    const pos = myPos;
+    if (pos < seq.length) {
+      if (seq[pos] !== i) {
+        // 手元ですぐ「間違い」の音を出す(正式な判定はサーバー)
+        myTurnActive = false;
+        localMissed = true;
+        setTimeout(playMiss, 250);
+      } else {
+        myPos++;
+        if (myPos === seq.length) say('全部正解。最後に1つ足してください。');
+      }
+    } else {
+      myTurnActive = false;
+      myPos++;
+      say('1つ足しました。次の人の番です。');
+    }
+    sendPress(i, pos);
+    render();
+  }
+
+  /**
+   * 押した順番どおりにサーバーへ送る。
+   * 送信中に押されたボタンはためておいて、次の通信でまとめて送る(速く押しても遅れがたまらない)。
+   */
+  function sendPress(i, pos) {
+    if (pendingPresses.length === 0) pendingStart = pos;
+    pendingPresses.push(i);
+    flushPresses();
+  }
+
+  async function flushPresses() {
+    if (sending || pendingPresses.length === 0 || !code) return;
+    sending = true;
+    const c = code, id = myId, epoch = syncEpoch;
+    const buttons = pendingPresses;
+    const start = pendingStart;
+    pendingPresses = [];
+    let failed = null;
+    try {
+      const r = await call('pressBatch', c, id, start, buttons);
+      if (epoch === syncEpoch && c === code) {
+        if (r && r.state) applyState(r.state);
+        if (r && r.error === 'out_of_sync') failed = '通信がずれました。';
+      }
+    } catch (e) {
+      if (epoch === syncEpoch && c === code) failed = '通信エラーが起きました。';
+    }
+    sending = false;
+    if (failed) {
+      resync(failed);
+      return;
+    }
+    flushPresses();
+  }
+
+  async function resync(reason) {
+    syncEpoch++;
+    myTurnActive = false;
+    pendingPresses = [];
+    localMissed = false;
+    const c = code;
+    if (!c) return;
+    try {
+      const r = await call('getState', c, -1, myId);
+      if (code !== c) return;
+      setAway(r.away);
+      if (r.changed) applyState(r.state);
+    } catch (e) { /* 次のポーリングに任せる */ }
+    if (state && currentId() === myId) {
+      myPos = state.inputPos;
+      myTurnActive = true;
+      say(`${reason}${myPos + 1}個目から押し直してください。`);
+    }
+    render();
+  }
+
+  document.querySelectorAll('.pad button').forEach((b) => {
+    b.addEventListener('click', () => onPad(Number(b.dataset.b)));
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ($('room').hidden) return;
+    if (e.target.matches && e.target.matches('input, textarea')) return;
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = ['1', '2', '3', '4'].indexOf(e.key);
+    if (k >= 0) {
+      e.preventDefault();
+      onPad(k);
+    }
+  });
+
+  // ============================================================
+  // 画面の更新と、状況の説明
+  // ============================================================
+  function describe() {
+    if (!state) return '';
+    const active = state.players.filter((p) => !p.left);
+    const names = active.map((p) => p.name + (p.id === myId ? '(あなた)' : '')).join('、');
+
+    if (state.status === 'waiting') {
+      let t = `部屋番号 ${digits(state.code)}。参加者は${active.length}人、${names}。`;
+      if (active.length < 2) t += 'あと1人以上そろうと始められます。';
+      else t += isHost() ? 'ゲーム開始ボタンで始まります。' : 'ホストの開始を待っています。';
+      return t;
+    }
+    if (state.status === 'playing') {
+      const cur = currentId();
+      const alive = state.players.filter((p) => p.alive).length;
+      let t = cur === myId ? 'あなたの番です。' : `${nameOf(cur)}さんの番です。`;
+      if (cur !== myId && away.includes(cur)) t += 'ただし離席中です。スキップできます。';
+      t += `覚える数は${state.sequence.length}個。残りは${alive}人。`;
+      if (cur === myId && myTurnActive) {
+        t += myPos < state.sequence.length
+          ? `いま${myPos}個目まで押しました。`
+          : 'あとは1つ足すだけです。';
+      }
+      return t;
+    }
+    const winner = state.winnerId === myId ? 'あなた' : (state.winnerName || nameOf(state.winnerId)) + 'さん';
+    return state.winnerId
+      ? `ゲーム終了。${winner}の勝ちです。${state.sequence.length}個まで続きました。`
+      : 'ゲーム終了。';
+  }
+
+  /** 参加者をチップで表示する。 */
+  function renderPlayers() {
+    const ul = $('playerList');
+    ul.innerHTML = '';
+    const cur = currentId();
+    state.players.forEach((p) => {
+      if (p.left && state.status === 'waiting') return;
+      const li = document.createElement('li');
+      li.className = 'chip';
+      if (p.id === myId) li.classList.add('is-me');
+      if (p.id === cur) li.classList.add('is-turn');
+      if (state.status !== 'waiting' && !p.alive) li.classList.add('is-out');
+      if (state.status === 'finished' && p.id === state.winnerId) li.classList.add('is-win');
+      li.append(p.name);
+
+      // [文字, 見た目にも出すか]
+      const tags = [];
+      if (p.id === myId) tags.push(['あなた', true]);
+      if (p.id === state.hostId) tags.push(['ホスト', true]);
+      if (!p.left && away.includes(p.id)) tags.push(['離席', true]);
+      if (state.status !== 'waiting' && !p.alive) tags.push([p.left ? '退出' : '脱落', false]);
+      if (p.id === cur) tags.push(['番', false]);
+      if (state.status === 'finished' && p.id === state.winnerId) tags.push(['勝ち', false]);
+      tags.forEach(([t, visible]) => {
+        const s = document.createElement('span');
+        if (visible) {
+          s.className = 'tag';
+          const sep = document.createElement('span');
+          sep.className = 'sr';
+          sep.textContent = '、';
+          li.append(sep);
+          s.textContent = t;
+        } else {
+          s.className = 'sr';
+          s.textContent = '、' + t;
+        }
+        li.append(s);
+      });
+      ul.append(li);
+    });
+  }
+
+  /** 覚える数をドットで表示する(自分の番は押した分が光る)。 */
+  function renderDots() {
+    const el = $('dots');
+    el.innerHTML = '';
+    if (state.status !== 'playing') { el.style.visibility = 'hidden'; return; }
+    el.style.visibility = 'visible';
+    const n = state.sequence.length;
+    const mine = currentId() === myId && myTurnActive;
+    for (let k = 0; k < Math.min(n, MAX_DOTS); k++) {
+      const d = document.createElement('i');
+      if (mine && k < myPos) d.className = 'on';
+      el.append(d);
+    }
+    if (n > MAX_DOTS) {
+      const more = document.createElement('b');
+      more.textContent = '+' + (n - MAX_DOTS);
+      el.append(more);
+    }
+    const add = document.createElement('i');
+    add.className = 'add';
+    el.append(add);
+  }
+
+  function render() {
+    if (!state) return;
+    const playing = state.status === 'playing';
+    $('codeText').textContent = state.code;
+    $('countText').textContent = state.sequence.length;
+    $('turnInfo').textContent = describe();
+
+    const app = $('app');
+    app.classList.toggle('is-playing', playing);
+    app.classList.toggle('my-turn', playing && currentId() === myId && myTurnActive);
+
+    renderPlayers();
+    renderDots();
+
+    // ホストが離席中なら、ほかの人もホストの操作ができる(押した人がホストになる)
+    const host = isHost() || away.includes(state.hostId);
+    const activeCount = state.players.filter((p) => !p.left).length;
+    $('startBtn').hidden = !host || playing;
+    $('startBtn').disabled = activeCount < 2;
+    $('startBtn').textContent = state.status === 'finished'
+      ? 'もう一度ゲーム開始'
+      : (activeCount < 2 ? 'あと1人そろうと開始できます' : 'ゲーム開始');
+    $('skipBtn').hidden = !playing || !(host || away.includes(currentId()));
+    $('lobbyBtn').hidden = !host || state.status === 'waiting';
+  }
+
+  // ============================================================
+  // 起動
+  // ============================================================
+  try {
+    if (localStorage.getItem('otoRelayTts') === '0') $('ttsToggle').checked = false;
+  } catch (e) {}
+  updateLiveMode();
+  updateBgmBtn();
+  (function () {
+    const saved = loadSession();
+    if (saved && saved.code) {
+      $('resumeBtn').textContent = `前の部屋(${saved.code})に戻る`;
+      $('resumeBtn').hidden = false;
+      $('resumeDivider').hidden = false;
+    }
+  })();
+</script>
+</body>
+</html>

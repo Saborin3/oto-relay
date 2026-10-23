@@ -336,12 +336,14 @@
     display: flex; flex-direction: column; align-items: center; gap: 2px;
     padding: 7px 4px;
     border: none; border-radius: 13px; background: transparent;
-    font-size: .72rem; font-weight: 700; color: var(--muted);
+    font-size: .72rem; font-weight: 700; color: var(--muted); white-space: nowrap;
     transition: background .15s, color .15s;
   }
   .tool svg { width: 22px; height: 22px; }
   .tool:hover, .tool:focus-visible { background: var(--glass-hi); color: var(--fg); }
   .tool.danger:hover { color: #ff8a8a; }
+  .tool[aria-pressed="true"] { color: var(--accent); }
+  .tool[aria-pressed="false"] svg { opacity: .45; }
 
   /* 横向き・背の低い画面:ボタンを横一列に */
   @media (max-height: 520px) and (orientation: landscape) {
@@ -368,6 +370,9 @@
     </div>
 
     <div class="panel">
+      <button class="btn primary" id="resumeBtn" hidden>前の部屋に戻る</button>
+      <div class="divider" id="resumeDivider" aria-hidden="true" hidden>または新しく</div>
+
       <label class="field-label" for="nameInput">あなたの名前(空でもOK)</label>
       <input class="input" type="text" id="nameInput" maxlength="12" autocomplete="nickname">
       <button class="btn primary mt" id="createBtn">部屋を作る</button>
@@ -420,21 +425,25 @@
     <p class="pad-hint">1〜4キーでも押せます ・ 自分の番以外は練習</p>
 
     <nav class="toolbar" aria-label="操作">
-      <button class="tool" id="repeatBtn">
+      <button class="tool" id="repeatBtn" aria-label="状況を聞く">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
-        <span>状況を聞く</span>
+        <span>状況</span>
+      </button>
+      <button class="tool" id="bgmBtn" aria-pressed="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        <span>BGM</span>
       </button>
       <button class="tool" id="skipBtn" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 5 10 7-10 7V5z"/><path d="M19 5v14"/></svg>
         <span>スキップ</span>
       </button>
-      <button class="tool" id="lobbyBtn" hidden>
+      <button class="tool" id="lobbyBtn" aria-label="待機に戻す" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
-        <span>待機に戻す</span>
+        <span>待機</span>
       </button>
-      <button class="tool danger" id="leaveBtn">
+      <button class="tool danger" id="leaveBtn" aria-label="退出(部屋を出る)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
-        <span>部屋を出る</span>
+        <span>退出</span>
       </button>
     </nav>
   </section>
@@ -463,8 +472,13 @@
   let myPos = 0;          // 自分の番で何個押したか
   let localMissed = false;
   let pollTimer = null;
-  let pressChain = Promise.resolve();
-  let syncEpoch = 0;      // 通信がずれたら増やして、古い送信を捨てる
+  let away = [];          // 離席中(しばらく通信がない)人のID
+  let pendingPresses = [];// まだ送っていないボタン
+  let pendingStart = 0;   // pendingPresses[0] が何個目か
+  let sending = false;    // 送信中かどうか
+  let syncEpoch = 0;      // 通信がずれたら増やして、古い送信の結果を捨てる
+  let skipArmedUntil = 0; // スキップの「もう一度押して決定」の期限
+  let skipTarget = null;  // スキップしようとしている人
   const eventQueue = [];
   let queueRunning = false;
 
@@ -506,8 +520,11 @@
     $('status').setAttribute('aria-live', ttsOn() ? 'off' : 'polite');
   }
 
+  // 同じ文が続いてもスクリーンリーダーが読み飛ばさないよう、見えない文字を交互につける
+  let statusFlip = false;
   function showStatus(text) {
-    $('status').textContent = text;
+    statusFlip = !statusFlip;
+    $('status').textContent = text + (statusFlip ? '​' : '');
   }
 
   /** 読み上げて、終わったら解決する Promise を返す。 */
@@ -519,7 +536,15 @@
     }
     return new Promise((resolve) => {
       let done = false;
-      const finish = () => { if (!done) { done = true; resolve(); } };
+      speakingCount++;
+      bgmRestore();
+      const finish = () => {
+        if (done) return;
+        done = true;
+        speakingCount = Math.max(0, speakingCount - 1);
+        bgmRestore();
+        resolve();
+      };
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'ja-JP';
       if (jaVoice) u.voice = jaVoice;
@@ -580,7 +605,119 @@
     setTimeout(() => b.classList.remove('lit'), 260);
   }
 
-  function playButton(i) { tone(FREQS[i], 0.4, 'triangle', 0.35); flash(i); }
+  // ============================================================
+  // BGM(Web Audio で作るオリジナル曲)
+  // ゲームの音(ド〜高いド:262〜523Hz)とかぶらないよう、それより低い音域の和音だけで作る。
+  // Am → F → C → G をゆっくりくり返す、やわらかいパッドの音。
+  // ============================================================
+  const BGM_VOL = 0.05;
+  const BGM_BAR = 4.0; // 1つの和音の長さ(秒)
+  const BGM_CHORDS = [
+    [110.00, 130.81, 164.81], // Am(ラ・ド・ミ)
+    [87.31, 110.00, 130.81],  // F (ファ・ラ・ド)
+    [98.00, 130.81, 164.81],  // C (ソ・ド・ミ)
+    [98.00, 123.47, 146.83]   // G (ソ・シ・レ)
+  ];
+  let bgmOn = true;
+  let bgmGain = null, bgmTimer = null, bgmNextTime = 0, bgmStep = 0;
+  let speakingCount = 0, duckTimer = null;
+  try { if (localStorage.getItem('otoRelayBgm') === '0') bgmOn = false; } catch (e) {}
+
+  function bgmEnsure() {
+    if (!audioCtx || bgmGain) return;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 800;
+    bgmGain = audioCtx.createGain();
+    bgmGain.gain.value = 0;
+    filter.connect(bgmGain).connect(audioCtx.destination);
+    bgmGain._in = filter;
+  }
+
+  function bgmLevel() { return (speakingCount > 0) ? BGM_VOL * 0.35 : BGM_VOL; }
+
+  function bgmStart() {
+    if (!bgmOn || !audioCtx || bgmTimer) return;
+    bgmEnsure();
+    const t = audioCtx.currentTime;
+    bgmGain.gain.cancelScheduledValues(t);
+    bgmGain.gain.setTargetAtTime(bgmLevel(), t, 1.0); // ふわっと始める
+    bgmNextTime = t + 0.1;
+    bgmTimer = setInterval(bgmSchedule, 250);
+    bgmSchedule();
+  }
+
+  function bgmStop() {
+    if (!bgmTimer) return;
+    clearInterval(bgmTimer);
+    bgmTimer = null;
+    const t = audioCtx.currentTime;
+    bgmGain.gain.cancelScheduledValues(t);
+    bgmGain.gain.setTargetAtTime(0, t, 0.4);
+  }
+
+  /** 少し先までの和音を予約する(タブが裏に回って遅れたら今から再開)。 */
+  function bgmSchedule() {
+    if (!audioCtx) return;
+    if (bgmNextTime < audioCtx.currentTime) bgmNextTime = audioCtx.currentTime + 0.05;
+    while (bgmNextTime < audioCtx.currentTime + 1.0) {
+      bgmChord(BGM_CHORDS[bgmStep % BGM_CHORDS.length], bgmNextTime);
+      bgmNextTime += BGM_BAR;
+      bgmStep++;
+    }
+  }
+
+  function bgmChord(freqs, t) {
+    const end = t + BGM_BAR + 1.5; // 次の和音と少し重ねてなめらかにつなぐ
+    freqs.forEach((f, idx) => {
+      [-5, 5].forEach((cents) => { // 2つを少しずらして重ね、広がりのある音にする
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = f;
+        osc.detune.value = cents;
+        const peak = idx === 0 ? 0.32 : 0.22;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(peak, t + 1.2);
+        g.gain.setValueAtTime(peak, t + BGM_BAR - 0.3);
+        g.gain.linearRampToValueAtTime(0.0001, end);
+        osc.connect(g).connect(bgmGain._in);
+        osc.start(t);
+        osc.stop(end + 0.05);
+      });
+    });
+    // 一番下の音をもう1オクターブ下で鳴らして、土台をつくる
+    const sub = audioCtx.createOscillator();
+    const sg = audioCtx.createGain();
+    sub.type = 'sine';
+    sub.frequency.value = freqs[0] / 2;
+    sg.gain.setValueAtTime(0.0001, t);
+    sg.gain.linearRampToValueAtTime(0.35, t + 0.8);
+    sg.gain.linearRampToValueAtTime(0.0001, end);
+    sub.connect(sg).connect(bgmGain._in);
+    sub.start(t);
+    sub.stop(end + 0.05);
+  }
+
+  /** ゲームの音や読み上げの間だけ、BGMを小さくする。 */
+  function bgmDuck(ms) {
+    if (!bgmGain || !bgmTimer) return;
+    const t = audioCtx.currentTime;
+    bgmGain.gain.cancelScheduledValues(t);
+    bgmGain.gain.setTargetAtTime(BGM_VOL * 0.3, t, 0.04);
+    clearTimeout(duckTimer);
+    duckTimer = setTimeout(bgmRestore, ms);
+  }
+  function bgmRestore() {
+    if (!bgmGain || !bgmTimer) return;
+    bgmGain.gain.setTargetAtTime(bgmLevel(), audioCtx.currentTime, 0.5);
+  }
+
+  function updateBgmBtn() {
+    $('bgmBtn').setAttribute('aria-pressed', bgmOn ? 'true' : 'false');
+  }
+
+  function playButton(i) { bgmDuck(900); tone(FREQS[i], 0.4, 'triangle', 0.35); flash(i); }
   function playMiss() { tone(146.8, 0.25, 'sawtooth', 0.2); tone(110, 0.45, 'sawtooth', 0.2, 0.22); }
   function playChime() { tone(880, 0.15, 'sine', 0.25); tone(1318.5, 0.25, 'sine', 0.25, 0.15); }
   function playWin() {
@@ -607,16 +744,42 @@
   // ============================================================
   // 部屋に入る/出る
   // ============================================================
+  // ============================================================
+  // 画面を閉じても戻れるように、部屋番号とプレイヤーIDを端末に保存する
+  // ============================================================
+  const SESSION_KEY = 'otoRelaySession';
+  function saveSession() {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ code: code, playerId: myId })); } catch (e) {}
+  }
+  function clearSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    $('resumeBtn').hidden = true;
+    $('resumeDivider').hidden = true;
+  }
+  function loadSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
+  }
+
   function enterRoom(res) {
     myId = res.playerId;
     state = res.state;
     code = state.code;
     lastEventId = state.nextEventId; // 入る前のイベントは読み上げない
+    away = res.away || [];
     myTurnActive = false;
+    localMissed = false;
+    pendingPresses = [];
+    // 戻ってきたときに自分の番の途中なら、続きから押せるようにする
+    if (currentId() === myId) {
+      myTurnActive = true;
+      myPos = state.inputPos;
+    }
+    saveSession();
     $('lobby').hidden = true;
     $('room').hidden = false;
     render();
     $('roomH').focus();
+    bgmStart();
     schedulePoll(POLL_MS);
   }
 
@@ -625,6 +788,11 @@
     code = null; myId = null; state = null;
     eventQueue.length = 0;
     myTurnActive = false;
+    pendingPresses = [];
+    away = [];
+    bgmStop();
+    speakingCount = 0;
+    if ('speechSynthesis' in window) speechSynthesis.cancel(); // 前の部屋の読み上げを止める
     $('room').hidden = true;
     $('lobby').hidden = false;
     $('app').classList.remove('is-playing', 'my-turn');
@@ -634,6 +802,7 @@
   function setBusy(busy) {
     $('createBtn').disabled = busy;
     $('joinBtn').disabled = busy;
+    $('resumeBtn').disabled = busy;
   }
 
   $('createBtn').addEventListener('click', async () => {
@@ -667,6 +836,28 @@
     }
   });
 
+  $('resumeBtn').addEventListener('click', async () => {
+    unlockAudio(); unlockSpeech();
+    const saved = loadSession();
+    if (!saved) { clearSession(); return; }
+    setBusy(true);
+    showStatus('前の部屋に戻っています…');
+    try {
+      const res = await call('resumeRoom', saved.code, saved.playerId);
+      enterRoom(res);
+      if (myTurnActive) {
+        say(`部屋に戻りました。あなたの番の途中です。${myPos + 1}個目から押してください。`);
+      } else {
+        say(`部屋番号 ${digits(code)} に戻りました。${describe()}`);
+      }
+    } catch (e) {
+      clearSession();
+      say(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  });
+
   // 部屋番号の欄で Enter を押したら参加
   $('codeInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') $('joinBtn').click();
@@ -674,6 +865,7 @@
 
   $('leaveBtn').addEventListener('click', async () => {
     const c = code, id = myId;
+    clearSession();
     resetLocal();
     say('部屋を出ました。');
     try { await call('leaveRoom', c, id); } catch (e) { /* 出るだけなので無視 */ }
@@ -687,11 +879,22 @@
     } catch (e) { say(errMsg(e)); }
   });
 
+  // 確認ダイアログは GAS の画面で出ないことがあるので、「もう一度押して決定」にする
   $('skipBtn').addEventListener('click', async () => {
-    if (!confirm(`${nameOf(currentId())}さんをスキップして脱落にしますか?`)) return;
+    const now = Date.now();
+    const target = currentId();
+    // 1回目、または1回目のあとに番が変わったら、改めて確認する
+    if (now > skipArmedUntil || skipTarget !== target) {
+      skipArmedUntil = now + 4000;
+      skipTarget = target;
+      say(`${nameOf(target)}さんをスキップします。4秒以内にもう一度押すと決定です。`);
+      return;
+    }
+    skipArmedUntil = 0;
     try {
-      const r = await call('skipCurrent', code, myId);
+      const r = await call('skipCurrent', code, myId, target);
       applyState(r.state);
+      if (r.error === 'turn_changed') say('番が変わったので、スキップを取りやめました。');
     } catch (e) { say(errMsg(e)); }
   });
 
@@ -700,6 +903,15 @@
       const r = await call('backToLobby', code, myId);
       applyState(r.state);
     } catch (e) { say(errMsg(e)); }
+  });
+
+  $('bgmBtn').addEventListener('click', () => {
+    unlockAudio();
+    bgmOn = !bgmOn;
+    try { localStorage.setItem('otoRelayBgm', bgmOn ? '1' : '0'); } catch (e) {}
+    updateBgmBtn();
+    if (bgmOn) bgmStart(); else bgmStop();
+    say(bgmOn ? 'BGMをオンにしました。' : 'BGMをオフにしました。');
   });
 
   $('repeatBtn').addEventListener('click', () => {
@@ -724,18 +936,27 @@
     if (!code) return;
     const c = code;
     try {
-      const r = await call('getState', c, state ? state.version : -1);
+      const r = await call('getState', c, state ? state.version : -1, myId);
       if (code !== c) return;
       if (r.gone) {
-        await speakAsync('部屋がなくなりました。最初の画面に戻ります。');
+        clearSession();
         resetLocal();
+        await speakAsync('部屋がなくなりました。最初の画面に戻ります。');
         return;
       }
+      setAway(r.away);
       if (r.changed) applyState(r.state);
     } catch (e) {
       // 一時的な通信エラーは次のポーリングで回復させる
     }
     if (code === c) schedulePoll(POLL_MS);
+  }
+
+  function setAway(list) {
+    const next = list || [];
+    if (next.join() === away.join()) return;
+    away = next;
+    render();
   }
 
   function applyState(s) {
@@ -766,7 +987,8 @@
     switch (e.type) {
       case 'join':
         if (e.player !== myId) {
-          await speakAsync(`${nameOf(e.player)}さんが参加しました。いま${state.players.filter((p) => !p.left).length}人です。`);
+          // 名前と人数はイベントに入っている値を使う(まとめて届いても正しく読むため)
+          await speakAsync(`${e.name || nameOf(e.player)}さんが参加しました。いま${e.count || state.players.length}人です。`);
         }
         break;
 
@@ -809,6 +1031,8 @@
           if (currentId() === myId && state.turnSerial === e.serial) {
             myTurnActive = true;
             myPos = 0;
+            localMissed = false;
+            pendingPresses = [];
             render();
             playChime();
             await wait(350);
@@ -825,7 +1049,7 @@
         playWin();
         await wait(700);
         await speakAsync(e.player
-          ? `${san(e.player)}の勝ち!${e.length}個まで続きました。`
+          ? `${e.player === myId ? 'あなた' : (e.name || nameOf(e.player)) + 'さん'}の勝ち!${e.length}個まで続きました。`
           : 'ゲーム終了です。');
         if (isHost()) await speakAsync('もう一度遊ぶときは、ゲーム開始を押してください。');
         break;
@@ -867,27 +1091,52 @@
     render();
   }
 
-  /** 押した順番どおりにサーバーへ送る(追い越し防止のため1つずつ)。 */
+  /**
+   * 押した順番どおりにサーバーへ送る。
+   * 送信中に押されたボタンはためておいて、次の通信でまとめて送る(速く押しても遅れがたまらない)。
+   */
   function sendPress(i, pos) {
+    if (pendingPresses.length === 0) pendingStart = pos;
+    pendingPresses.push(i);
+    flushPresses();
+  }
+
+  async function flushPresses() {
+    if (sending || pendingPresses.length === 0 || !code) return;
+    sending = true;
     const c = code, id = myId, epoch = syncEpoch;
-    pressChain = pressChain
-      .then(() => {
-        if (epoch !== syncEpoch || c !== code) return null;
-        return call('press', c, id, i, pos);
-      })
-      .then((r) => {
-        if (!r) return;
-        if (r.state) applyState(r.state);
-        if (r.error === 'out_of_sync') resync('通信がずれました。');
-      })
-      .catch(() => resync('通信エラーが起きました。'));
+    const buttons = pendingPresses;
+    const start = pendingStart;
+    pendingPresses = [];
+    let failed = null;
+    try {
+      const r = await call('pressBatch', c, id, start, buttons);
+      if (epoch === syncEpoch && c === code) {
+        if (r && r.state) applyState(r.state);
+        if (r && r.error === 'out_of_sync') failed = '通信がずれました。';
+      }
+    } catch (e) {
+      if (epoch === syncEpoch && c === code) failed = '通信エラーが起きました。';
+    }
+    sending = false;
+    if (failed) {
+      resync(failed);
+      return;
+    }
+    flushPresses();
   }
 
   async function resync(reason) {
     syncEpoch++;
     myTurnActive = false;
+    pendingPresses = [];
+    localMissed = false;
+    const c = code;
+    if (!c) return;
     try {
-      const r = await call('getState', code, -1);
+      const r = await call('getState', c, -1, myId);
+      if (code !== c) return;
+      setAway(r.away);
       if (r.changed) applyState(r.state);
     } catch (e) { /* 次のポーリングに任せる */ }
     if (state && currentId() === myId) {
@@ -931,6 +1180,7 @@
       const cur = currentId();
       const alive = state.players.filter((p) => p.alive).length;
       let t = cur === myId ? 'あなたの番です。' : `${nameOf(cur)}さんの番です。`;
+      if (cur !== myId && away.includes(cur)) t += 'ただし離席中です。スキップできます。';
       t += `覚える数は${state.sequence.length}個。残りは${alive}人。`;
       if (cur === myId && myTurnActive) {
         t += myPos < state.sequence.length
@@ -939,8 +1189,9 @@
       }
       return t;
     }
+    const winner = state.winnerId === myId ? 'あなた' : (state.winnerName || nameOf(state.winnerId)) + 'さん';
     return state.winnerId
-      ? `ゲーム終了。${san(state.winnerId)}の勝ちです。${state.sequence.length}個まで続きました。`
+      ? `ゲーム終了。${winner}の勝ちです。${state.sequence.length}個まで続きました。`
       : 'ゲーム終了。';
   }
 
@@ -963,6 +1214,7 @@
       const tags = [];
       if (p.id === myId) tags.push(['あなた', true]);
       if (p.id === state.hostId) tags.push(['ホスト', true]);
+      if (!p.left && away.includes(p.id)) tags.push(['離席', true]);
       if (state.status !== 'waiting' && !p.alive) tags.push([p.left ? '退出' : '脱落', false]);
       if (p.id === cur) tags.push(['番', false]);
       if (state.status === 'finished' && p.id === state.winnerId) tags.push(['勝ち', false]);
@@ -1022,14 +1274,15 @@
     renderPlayers();
     renderDots();
 
-    const host = isHost();
+    // ホストが離席中なら、ほかの人もホストの操作ができる(押した人がホストになる)
+    const host = isHost() || away.includes(state.hostId);
     const activeCount = state.players.filter((p) => !p.left).length;
     $('startBtn').hidden = !host || playing;
     $('startBtn').disabled = activeCount < 2;
     $('startBtn').textContent = state.status === 'finished'
       ? 'もう一度ゲーム開始'
       : (activeCount < 2 ? 'あと1人そろうと開始できます' : 'ゲーム開始');
-    $('skipBtn').hidden = !host || !playing;
+    $('skipBtn').hidden = !playing || !(host || away.includes(currentId()));
     $('lobbyBtn').hidden = !host || state.status === 'waiting';
   }
 
@@ -1040,6 +1293,15 @@
     if (localStorage.getItem('otoRelayTts') === '0') $('ttsToggle').checked = false;
   } catch (e) {}
   updateLiveMode();
+  updateBgmBtn();
+  (function () {
+    const saved = loadSession();
+    if (saved && saved.code) {
+      $('resumeBtn').textContent = `前の部屋(${saved.code})に戻る`;
+      $('resumeBtn').hidden = false;
+      $('resumeDivider').hidden = false;
+    }
+  })();
 </script>
 </body>
 </html>

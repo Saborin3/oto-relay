@@ -70,7 +70,7 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 22px;
+    gap: 16px;
     padding: 8px 2px;
   }
   .brand { text-align: center; }
@@ -170,7 +170,7 @@
   /* 読み上げ切り替えスイッチ */
   .switch {
     display: flex; gap: 12px; align-items: flex-start;
-    margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
     cursor: pointer;
   }
   .switch input {
@@ -273,7 +273,7 @@
   .dots i.add { background: transparent; border: 1.5px dashed rgba(255, 255, 255, .5); }
   .dots b { font-family: var(--num); font-size: .75rem; color: var(--muted); margin-left: 2px; }
 
-  #startBtn { order: 4; padding: 13px; font-size: 1.05rem; }
+  #startBtn, #introSkipBtn { order: 4; padding: 13px; font-size: 1.05rem; }
 
   /* ===== 4つのボタン ===== */
   #padH { margin: 0; }
@@ -351,6 +351,12 @@
     .pad { grid-template-columns: repeat(4, 1fr); grid-template-rows: 1fr; }
     .pad-hint { display: none; }
   }
+  /* 背の低いスマホ(iPhone SE など)では、ロビーのロゴとキャッチコピーを省いて1画面に収める */
+  @media (max-height: 720px) {
+    .logo, .tagline { display: none; }
+    .lobby { gap: 12px; }
+    .panel { padding: 14px; }
+  }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
@@ -389,7 +395,7 @@
         <input type="checkbox" id="ttsToggle" checked>
         <span>
           <b>音声合成で読み上げる</b>
-          <small>VoiceOver・TalkBack・NVDAなどを使う人はオフに。スクリーンリーダーが読み上げます。</small>
+          <small>スクリーンリーダーを使う人はオフに。</small>
         </span>
       </label>
 
@@ -397,7 +403,15 @@
         <input type="checkbox" id="assistToggle">
         <span>
           <b>番号も読み上げる(初心者向け)</b>
-          <small>音が鳴るたびに「いち」「に」と番号も読み上げます。慣れないうちはオンがおすすめ。</small>
+          <small>音のあとに「いち」「に」と読み上げます。</small>
+        </span>
+      </label>
+
+      <label class="switch">
+        <input type="checkbox" id="introToggle" checked>
+        <span>
+          <b>はじめに音を確認する</b>
+          <small>開始時に4つの音を聞かせます。途中でスキップ可。</small>
         </span>
       </label>
     </div>
@@ -422,6 +436,7 @@
     <div id="dots" class="dots" aria-hidden="true"></div>
 
     <button class="btn primary" id="startBtn" hidden>ゲーム開始</button>
+    <button class="btn" id="introSkipBtn" hidden>音の確認をスキップ</button>
 
     <h2 id="padH" class="sr">ボタン</h2>
     <div class="pad" role="group" aria-labelledby="padH">
@@ -543,6 +558,17 @@
     $('status').textContent = text + (statusFlip ? '​' : '');
   }
 
+  /**
+   * 音声合成が読み間違える言葉を、読み上げるときだけひらがなにする。
+   * 例:「番」→「つがい」、「足して」→「あしして」と読まれるのを防ぐ。
+   */
+  function yomi(text) {
+    return String(text)
+      .replace(/番(?!号)/g, 'ばん')
+      .replace(/足し/g, 'たし')
+      .replace(/足す/g, 'たす');
+  }
+
   /** 読み上げて、終わったら解決する Promise を返す。 */
   function speakAsync(text) {
     showStatus(text);
@@ -561,7 +587,7 @@
         bgmRestore();
         resolve();
       };
-      const u = new SpeechSynthesisUtterance(text);
+      const u = new SpeechSynthesisUtterance(yomi(text));
       u.lang = 'ja-JP';
       if (jaVoice) u.voice = jaVoice;
       u.rate = 1.1;
@@ -938,6 +964,8 @@
     away = [];
     bgmStop();
     speakingCount = 0;
+    introSkipped = true;
+    $('introSkipBtn').hidden = true;
     if ('speechSynthesis' in window) speechSynthesis.cancel(); // 前の部屋の読み上げを止める
     $('room').hidden = true;
     $('lobby').hidden = false;
@@ -1065,6 +1093,10 @@
     say(describe());
   });
 
+  $('introToggle').addEventListener('change', () => {
+    try { localStorage.setItem('otoRelayIntro', introOn() ? '1' : '0'); } catch (e) {}
+  });
+
   $('assistToggle').addEventListener('change', () => {
     try { localStorage.setItem('otoRelayAssist', assistOn() ? '1' : '0'); } catch (e) {}
   });
@@ -1149,6 +1181,7 @@
       case 'start':
         playChime();
         await speakAsync('スタート');
+        if (introOn()) await playIntro();
         break;
 
       case 'press':
@@ -1192,7 +1225,6 @@
             render();
             playChime();
             await wait(350);
-            // 「足して」は「あしして」と読まれるので、ひらがなで書く
             await speakAsync(e.length === 0 ? 'あなたの番。好きな音をひとつ。' : `あなたの番。${e.length}個。`);
           }
         } else {
@@ -1215,6 +1247,41 @@
   }
 
   // ============================================================
+  // はじめの音の確認(スキップできる)
+  // ============================================================
+  let introRunning = false;
+  let introSkipped = false;
+
+  function introOn() { return $('introToggle').checked; }
+
+  async function playIntro() {
+    introRunning = true;
+    introSkipped = false;
+    $('introSkipBtn').hidden = false;
+    try {
+      await speakAsync('音の確認。');
+      for (let i = 0; i < 4 && !introSkipped && code; i++) {
+        await speakAsync(`${NUM_WORDS[i]}、${NOTE_NAMES[i]}。`);
+        if (introSkipped) break;
+        playButton(i);
+        await wait(800);
+      }
+      if (!introSkipped) await speakAsync('確認おわり。');
+    } finally {
+      introRunning = false;
+      $('introSkipBtn').hidden = true;
+    }
+  }
+
+  $('introSkipBtn').addEventListener('click', () => {
+    if (!introRunning) return;
+    introSkipped = true;
+    if (ttsOn()) speechSynthesis.cancel(); // 読み上げ中の説明もすぐ止める
+    $('introSkipBtn').hidden = true;
+    showStatus('スキップしました。');
+  });
+
+  // ============================================================
   // ボタンを押したとき
   // ============================================================
   function onPad(i) {
@@ -1235,7 +1302,7 @@
         setTimeout(playMiss, 250);
       } else {
         myPos++;
-        if (myPos === seq.length) say('ひとつ、たして。');
+        if (myPos === seq.length) say('ひとつ足して。');
       }
     } else {
       myTurnActive = false;
@@ -1334,7 +1401,7 @@
       if (cur !== myId && away.includes(cur)) t += '離席中。';
       t += `${state.sequence.length}個。残り${alive}人。`;
       if (cur === myId && myTurnActive) {
-        t += myPos < state.sequence.length ? `${myPos}個まで押した。` : 'あとひとつ、たす。';
+        t += myPos < state.sequence.length ? `${myPos}個まで押した。` : 'あとひとつ足す。';
       }
       return t;
     }
@@ -1441,6 +1508,7 @@
   try {
     if (localStorage.getItem('otoRelayTts') === '0') $('ttsToggle').checked = false;
     if (localStorage.getItem('otoRelayAssist') === '1') $('assistToggle').checked = true;
+    if (localStorage.getItem('otoRelayIntro') === '0') $('introToggle').checked = false;
   } catch (e) {}
   updateLiveMode();
   updateBgmBtn();

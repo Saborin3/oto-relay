@@ -392,6 +392,14 @@
           <small>VoiceOver・TalkBack・NVDAなどを使う人はオフに。スクリーンリーダーが読み上げます。</small>
         </span>
       </label>
+
+      <label class="switch">
+        <input type="checkbox" id="assistToggle">
+        <span>
+          <b>番号も読み上げる(初心者向け)</b>
+          <small>音が鳴るたびに「いち」「に」と番号も読み上げます。慣れないうちはオンがおすすめ。</small>
+        </span>
+      </label>
     </div>
   </section>
 
@@ -417,10 +425,10 @@
 
     <h2 id="padH" class="sr">ボタン</h2>
     <div class="pad" role="group" aria-labelledby="padH">
-      <button class="b0" data-b="0" aria-label="1 ド"><span class="num" aria-hidden="true">1</span><span class="note" aria-hidden="true">ド</span></button>
-      <button class="b1" data-b="1" aria-label="2 ミ"><span class="num" aria-hidden="true">2</span><span class="note" aria-hidden="true">ミ</span></button>
-      <button class="b2" data-b="2" aria-label="3 ソ"><span class="num" aria-hidden="true">3</span><span class="note" aria-hidden="true">ソ</span></button>
-      <button class="b3" data-b="3" aria-label="4 高いド"><span class="num" aria-hidden="true">4</span><span class="note" aria-hidden="true">高いド</span></button>
+      <button class="b0" data-b="0" aria-label="1 太鼓"><span class="num" aria-hidden="true">1</span><span class="note" aria-hidden="true">太鼓</span></button>
+      <button class="b1" data-b="1" aria-label="2 ベル"><span class="num" aria-hidden="true">2</span><span class="note" aria-hidden="true">ベル</span></button>
+      <button class="b2" data-b="2" aria-label="3 手拍子"><span class="num" aria-hidden="true">3</span><span class="note" aria-hidden="true">手拍子</span></button>
+      <button class="b3" data-b="3" aria-label="4 笛"><span class="num" aria-hidden="true">4</span><span class="note" aria-hidden="true">笛</span></button>
     </div>
     <p class="pad-hint">1〜4キーでも押せます ・ 自分の番以外は練習</p>
 
@@ -450,11 +458,18 @@
 </div>
 
 <script>
+  // GAS 以外(GitHub Pages やパソコンで直接開いた場合)は、GAS のゲームに移動する
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzBFEGuJCzFWTFPB-eIPn4ioOGUCKPJwF6eeJNHjjzY9SmthHiWfNVbdTKThb1g0k3z/exec';
+  if (typeof google === 'undefined' || !google.script) {
+    location.replace(GAS_URL);
+  }
+
   // ============================================================
   // 設定
   // ============================================================
-  const NOTE_NAMES = ['ド', 'ミ', 'ソ', '高いド'];
-  const FREQS = [261.63, 329.63, 392.0, 523.25];
+  // 音の高さではなく「音色」で区別する(絶対音感がなくても聞き分けられるように)
+  const NOTE_NAMES = ['太鼓', 'ベル', '手拍子', '笛'];
+  const NUM_WORDS = ['いち', 'に', 'さん', 'よん'];
   const POLL_MS = 1000;
   const MAX_DOTS = 24;
 
@@ -571,6 +586,8 @@
         if (AC) audioCtx = new AC();
       }
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      // iPhone(iOS 17以降)でマナーモードでも音が出るようにする
+      if (navigator.audioSession) navigator.audioSession.type = 'playback';
     } catch (e) { /* 音が出せない環境でもゲームは続ける */ }
   }
 
@@ -598,6 +615,97 @@
     osc.stop(t + dur + 0.05);
   }
 
+  // ============================================================
+  // 4つの音色(Web Audio で作る)
+  // ============================================================
+  let noiseBuf = null;
+  function noise() {
+    if (!noiseBuf) {
+      noiseBuf = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let k = 0; k < d.length; k++) d[k] = Math.random() * 2 - 1;
+    }
+    const src = audioCtx.createBufferSource();
+    src.buffer = noiseBuf;
+    return src;
+  }
+
+  /** gain つきで出力につなぐ。 */
+  function out(node, t, peak, attack, decay) {
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+    node.connect(g).connect(audioCtx.destination);
+    return g;
+  }
+
+  /** 1:太鼓「ドン」— 音程が急に下がる低い音+打った瞬間の「コツ」 */
+  function sndDrum(t) {
+    const o = audioCtx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(230, t);
+    o.frequency.exponentialRampToValueAtTime(70, t + 0.25);
+    out(o, t, 0.9, 0.005, 0.45);
+    o.start(t); o.stop(t + 0.5);
+    const n = noise();
+    const f = audioCtx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 1200;
+    n.connect(f);
+    out(f, t, 0.35, 0.002, 0.05);
+    n.start(t); n.stop(t + 0.08);
+  }
+
+  /** 2:ベル「チーン」— 金属っぽい倍音を重ねて長く響かせる */
+  function sndBell(t) {
+    [[1, 0.35, 1.3], [2.76, 0.18, 0.7], [5.4, 0.1, 0.35], [8.9, 0.05, 0.2]].forEach(([mul, vol, dec]) => {
+      const o = audioCtx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = 880 * mul;
+      out(o, t, vol, 0.003, dec);
+      o.start(t); o.stop(t + dec + 0.05);
+    });
+  }
+
+  /** 3:手拍子「パン」— 雑音を短く3回重ねる */
+  function sndClap(t) {
+    const f = audioCtx.createBiquadFilter();
+    f.type = 'bandpass'; f.frequency.value = 1300; f.Q.value = 0.9;
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    [0, 0.012, 0.024].forEach((d) => {
+      g.gain.setValueAtTime(1.6, t + d);
+      g.gain.exponentialRampToValueAtTime(0.3, t + d + 0.01);
+    });
+    g.gain.setValueAtTime(1.4, t + 0.034);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.26);
+    const n = noise();
+    n.connect(f).connect(g).connect(audioCtx.destination);
+    n.start(t); n.stop(t + 0.25);
+  }
+
+  /** 4:笛「ピュー」— 高い音が上にすべって、ゆれる */
+  function sndWhistle(t) {
+    const o = audioCtx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(1300, t);
+    o.frequency.exponentialRampToValueAtTime(1900, t + 0.3);
+    const lfo = audioCtx.createOscillator();
+    const lg = audioCtx.createGain();
+    lfo.frequency.value = 7; lg.gain.value = 35;
+    lfo.connect(lg).connect(o.frequency);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.28, t + 0.04);
+    g.gain.setValueAtTime(0.28, t + 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t); o.stop(t + 0.5);
+    lfo.start(t); lfo.stop(t + 0.5);
+  }
+
+  const SOUNDS = [sndDrum, sndBell, sndClap, sndWhistle];
+
   function flash(i) {
     const b = document.querySelector(`.pad button[data-b="${i}"]`);
     if (!b) return;
@@ -607,16 +715,16 @@
 
   // ============================================================
   // BGM(Web Audio で作るオリジナル曲)
-  // ゲームの音(ド〜高いド:262〜523Hz)とかぶらないよう、それより低い音域の和音だけで作る。
-  // Am → F → C → G をゆっくりくり返す、やわらかいパッドの音。
+  // スマホのスピーカーでも聞こえる中くらいの音域で、Am → F → C → G をゆっくりくり返す。
+  // ゲームの音は打楽器・ベル・笛なので、やわらかいパッドの音なら混ざらない。
   // ============================================================
-  const BGM_VOL = 0.05;
+  const BGM_VOL = 0.1;
   const BGM_BAR = 4.0; // 1つの和音の長さ(秒)
   const BGM_CHORDS = [
-    [110.00, 130.81, 164.81], // Am(ラ・ド・ミ)
-    [87.31, 110.00, 130.81],  // F (ファ・ラ・ド)
-    [98.00, 130.81, 164.81],  // C (ソ・ド・ミ)
-    [98.00, 123.47, 146.83]   // G (ソ・シ・レ)
+    [220.00, 261.63, 329.63], // Am(ラ・ド・ミ)
+    [174.61, 220.00, 261.63], // F (ファ・ラ・ド)
+    [196.00, 261.63, 329.63], // C (ソ・ド・ミ)
+    [196.00, 246.94, 293.66]  // G (ソ・シ・レ)
   ];
   let bgmOn = true;
   let bgmGain = null, bgmTimer = null, bgmNextTime = 0, bgmStep = 0;
@@ -627,7 +735,7 @@
     if (!audioCtx || bgmGain) return;
     const filter = audioCtx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 800;
+    filter.frequency.value = 1600;
     bgmGain = audioCtx.createGain();
     bgmGain.gain.value = 0;
     filter.connect(bgmGain).connect(audioCtx.destination);
@@ -717,7 +825,31 @@
     $('bgmBtn').setAttribute('aria-pressed', bgmOn ? 'true' : 'false');
   }
 
-  function playButton(i) { bgmDuck(900); tone(FREQS[i], 0.4, 'triangle', 0.35); flash(i); }
+  function playButton(i) {
+    bgmDuck(900);
+    flash(i);
+    if (audioCtx) SOUNDS[i](audioCtx.currentTime + 0.01);
+  }
+
+  // ============================================================
+  // 番号の読み上げ補助
+  // ============================================================
+  function assistOn() { return $('assistToggle').checked; }
+
+  /** 自分で押したとき用:前の読み上げを止めて、すぐ番号だけ読む。 */
+  function sayNumberNow(i) {
+    if (!assistOn()) return;
+    if (ttsOn()) {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(NUM_WORDS[i]);
+      u.lang = 'ja-JP';
+      if (jaVoice) u.voice = jaVoice;
+      u.rate = 1.4;
+      speechSynthesis.speak(u);
+    } else {
+      showStatus(String(i + 1));
+    }
+  }
   function playMiss() { tone(146.8, 0.25, 'sawtooth', 0.2); tone(110, 0.45, 'sawtooth', 0.2, 0.22); }
   function playChime() { tone(880, 0.15, 'sine', 0.25); tone(1318.5, 0.25, 'sine', 0.25, 0.15); }
   function playWin() {
@@ -812,7 +944,7 @@
     try {
       const res = await call('createRoom', $('nameInput').value);
       enterRoom(res);
-      say(`部屋を作りました。部屋番号は ${digits(code)} です。みんなに伝えてください。`);
+      say(`部屋番号、${digits(code)}。`);
     } catch (e) {
       say(errMsg(e));
     } finally {
@@ -828,7 +960,7 @@
     try {
       const res = await call('joinRoom', c, $('nameInput').value);
       enterRoom(res);
-      say(`部屋番号 ${digits(code)} に参加しました。いま${state.players.length}人です。ホストが始めるのを待ってください。`);
+      say(`参加しました。${state.players.length}人。`);
     } catch (e) {
       say(errMsg(e));
     } finally {
@@ -846,9 +978,9 @@
       const res = await call('resumeRoom', saved.code, saved.playerId);
       enterRoom(res);
       if (myTurnActive) {
-        say(`部屋に戻りました。あなたの番の途中です。${myPos + 1}個目から押してください。`);
+        say(`戻りました。${myPos + 1}個目から。`);
       } else {
-        say(`部屋番号 ${digits(code)} に戻りました。${describe()}`);
+        say('戻りました。');
       }
     } catch (e) {
       clearSession();
@@ -867,7 +999,7 @@
     const c = code, id = myId;
     clearSession();
     resetLocal();
-    say('部屋を出ました。');
+    say('退出しました。');
     try { await call('leaveRoom', c, id); } catch (e) { /* 出るだけなので無視 */ }
   });
 
@@ -887,14 +1019,14 @@
     if (now > skipArmedUntil || skipTarget !== target) {
       skipArmedUntil = now + 4000;
       skipTarget = target;
-      say(`${nameOf(target)}さんをスキップします。4秒以内にもう一度押すと決定です。`);
+      say(`${nameOf(target)}さんをスキップ。もう一度押すと決定。`);
       return;
     }
     skipArmedUntil = 0;
     try {
       const r = await call('skipCurrent', code, myId, target);
       applyState(r.state);
-      if (r.error === 'turn_changed') say('番が変わったので、スキップを取りやめました。');
+      if (r.error === 'turn_changed') say('スキップ取りやめ。');
     } catch (e) { say(errMsg(e)); }
   });
 
@@ -911,12 +1043,16 @@
     try { localStorage.setItem('otoRelayBgm', bgmOn ? '1' : '0'); } catch (e) {}
     updateBgmBtn();
     if (bgmOn) bgmStart(); else bgmStop();
-    say(bgmOn ? 'BGMをオンにしました。' : 'BGMをオフにしました。');
+    say(bgmOn ? 'BGMオン' : 'BGMオフ');
   });
 
   $('repeatBtn').addEventListener('click', () => {
     if (ttsOn()) speechSynthesis.cancel();
     say(describe());
+  });
+
+  $('assistToggle').addEventListener('change', () => {
+    try { localStorage.setItem('otoRelayAssist', assistOn() ? '1' : '0'); } catch (e) {}
   });
 
   $('ttsToggle').addEventListener('change', () => {
@@ -941,7 +1077,7 @@
       if (r.gone) {
         clearSession();
         resetLocal();
-        await speakAsync('部屋がなくなりました。最初の画面に戻ります。');
+        await speakAsync('部屋がなくなりました。');
         return;
       }
       setAway(r.away);
@@ -988,23 +1124,29 @@
       case 'join':
         if (e.player !== myId) {
           // 名前と人数はイベントに入っている値を使う(まとめて届いても正しく読むため)
-          await speakAsync(`${e.name || nameOf(e.player)}さんが参加しました。いま${e.count || state.players.length}人です。`);
+          await speakAsync(`${e.name || nameOf(e.player)}さん参加。${e.count || state.players.length}人。`);
         }
         break;
 
       case 'leave':
-        if (e.player !== myId) await speakAsync(`${e.name}さんが部屋を出ました。`);
+        if (e.player !== myId) await speakAsync(`${e.name}さん退出。`);
         break;
 
       case 'start':
         playChime();
-        await speakAsync('ゲーム開始!');
+        await speakAsync('スタート');
         break;
 
       case 'press':
         if (e.player === myId) break; // 自分の音は押したときに鳴らしている
         playButton(e.button);
-        await wait(500);
+        if (assistOn()) {
+          await wait(350);
+          await speakAsync(NUM_WORDS[e.button]);
+          await wait(150);
+        } else {
+          await wait(500);
+        }
         break;
 
       case 'miss': {
@@ -1013,12 +1155,12 @@
         if (me) localMissed = false;
         await wait(600);
         if (e.reason === 'skip') {
-          await speakAsync(`${san(e.player)}はスキップされて脱落です。`);
+          await speakAsync(`${san(e.player)}、脱落。`);
           break;
         }
-        await speakAsync(me ? '間違えました。あなたは脱落です。' : `${nameOf(e.player)}さん、間違えて脱落です。`);
+        await speakAsync(me ? '残念、脱落。' : `${nameOf(e.player)}さん、脱落。`);
         if (typeof e.expected === 'number') {
-          await speakAsync(`正しくは、${e.expected + 1}番の${NOTE_NAMES[e.expected]}でした。`);
+          await speakAsync(`正解は、${NOTE_NAMES[e.expected]}。`);
           playButton(e.expected);
           await wait(500);
         }
@@ -1036,12 +1178,11 @@
             render();
             playChime();
             await wait(350);
-            await speakAsync(e.length === 0
-              ? 'あなたの番です。好きなボタンを1つ押してください。'
-              : `あなたの番です。${e.length}個の音を順番に押して、最後に1つ足してください。`);
+            // 「足して」は「あしして」と読まれるので、ひらがなで書く
+            await speakAsync(e.length === 0 ? 'あなたの番。好きな音をひとつ。' : `あなたの番。${e.length}個。`);
           }
         } else {
-          await speakAsync(`${nameOf(e.player)}さんの番です。${e.length}個。`);
+          await speakAsync(`${nameOf(e.player)}さんの番。`);
         }
         break;
 
@@ -1049,13 +1190,12 @@
         playWin();
         await wait(700);
         await speakAsync(e.player
-          ? `${e.player === myId ? 'あなた' : (e.name || nameOf(e.player)) + 'さん'}の勝ち!${e.length}個まで続きました。`
-          : 'ゲーム終了です。');
-        if (isHost()) await speakAsync('もう一度遊ぶときは、ゲーム開始を押してください。');
+          ? `${e.player === myId ? 'あなた' : (e.name || nameOf(e.player)) + 'さん'}の勝ち!${e.length}個。`
+          : '終了。');
         break;
 
       case 'reset':
-        await speakAsync('待機中に戻りました。ホストがゲーム開始を押すと始まります。');
+        await speakAsync('待機中。');
         break;
     }
   }
@@ -1066,6 +1206,7 @@
   function onPad(i) {
     unlockAudio();
     playButton(i);
+    sayNumberNow(i);
 
     // 自分の番じゃないときは練習(音だけ)
     if (!state || state.status !== 'playing' || !myTurnActive || currentId() !== myId) return;
@@ -1080,12 +1221,11 @@
         setTimeout(playMiss, 250);
       } else {
         myPos++;
-        if (myPos === seq.length) say('全部正解。最後に1つ足してください。');
+        if (myPos === seq.length) say('ひとつ、たして。');
       }
     } else {
       myTurnActive = false;
       myPos++;
-      say('1つ足しました。次の人の番です。');
     }
     sendPress(i, pos);
     render();
@@ -1113,10 +1253,10 @@
       const r = await call('pressBatch', c, id, start, buttons);
       if (epoch === syncEpoch && c === code) {
         if (r && r.state) applyState(r.state);
-        if (r && r.error === 'out_of_sync') failed = '通信がずれました。';
+        if (r && r.error === 'out_of_sync') failed = '通信ずれ。';
       }
     } catch (e) {
-      if (epoch === syncEpoch && c === code) failed = '通信エラーが起きました。';
+      if (epoch === syncEpoch && c === code) failed = '通信エラー。';
     }
     sending = false;
     if (failed) {
@@ -1142,7 +1282,7 @@
     if (state && currentId() === myId) {
       myPos = state.inputPos;
       myTurnActive = true;
-      say(`${reason}${myPos + 1}個目から押し直してください。`);
+      say(`${reason}${myPos + 1}個目から。`);
     }
     render();
   }
@@ -1171,28 +1311,23 @@
     const names = active.map((p) => p.name + (p.id === myId ? '(あなた)' : '')).join('、');
 
     if (state.status === 'waiting') {
-      let t = `部屋番号 ${digits(state.code)}。参加者は${active.length}人、${names}。`;
-      if (active.length < 2) t += 'あと1人以上そろうと始められます。';
-      else t += isHost() ? 'ゲーム開始ボタンで始まります。' : 'ホストの開始を待っています。';
-      return t;
+      return `待機中。部屋${digits(state.code)}。${active.length}人、${names}。`;
     }
     if (state.status === 'playing') {
       const cur = currentId();
       const alive = state.players.filter((p) => p.alive).length;
-      let t = cur === myId ? 'あなたの番です。' : `${nameOf(cur)}さんの番です。`;
-      if (cur !== myId && away.includes(cur)) t += 'ただし離席中です。スキップできます。';
-      t += `覚える数は${state.sequence.length}個。残りは${alive}人。`;
+      let t = cur === myId ? 'あなたの番。' : `${nameOf(cur)}さんの番。`;
+      if (cur !== myId && away.includes(cur)) t += '離席中。';
+      t += `${state.sequence.length}個。残り${alive}人。`;
       if (cur === myId && myTurnActive) {
-        t += myPos < state.sequence.length
-          ? `いま${myPos}個目まで押しました。`
-          : 'あとは1つ足すだけです。';
+        t += myPos < state.sequence.length ? `${myPos}個まで押した。` : 'あとひとつ、たす。';
       }
       return t;
     }
     const winner = state.winnerId === myId ? 'あなた' : (state.winnerName || nameOf(state.winnerId)) + 'さん';
     return state.winnerId
-      ? `ゲーム終了。${winner}の勝ちです。${state.sequence.length}個まで続きました。`
-      : 'ゲーム終了。';
+      ? `終了。${winner}の勝ち。${state.sequence.length}個。`
+      : '終了。';
   }
 
   /** 参加者をチップで表示する。 */
@@ -1291,6 +1426,7 @@
   // ============================================================
   try {
     if (localStorage.getItem('otoRelayTts') === '0') $('ttsToggle').checked = false;
+    if (localStorage.getItem('otoRelayAssist') === '1') $('assistToggle').checked = true;
   } catch (e) {}
   updateLiveMode();
   updateBgmBtn();

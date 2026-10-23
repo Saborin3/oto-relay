@@ -480,7 +480,8 @@
   // 状態
   // ============================================================
   let code = null;        // 部屋番号
-  let myId = null;        // 自分のプレイヤーID
+  let myId = null;        // 自分のプレイヤーID(みんなに見える)
+  let myToken = null;     // 自分だけの合言葉(サーバーへの操作に使う。ほかの人には送られない)
   let state = null;       // サーバーから来た最新の部屋の状態
   let lastEventId = 0;    // 処理済みのイベントID
   let myTurnActive = false;
@@ -585,11 +586,18 @@
         const AC = window.AudioContext || window.webkitAudioContext;
         if (AC) audioCtx = new AC();
       }
-      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      if (audioCtx && audioCtx.state !== 'running') audioCtx.resume();
       // iPhone(iOS 17以降)でマナーモードでも音が出るようにする
       if (navigator.audioSession) navigator.audioSession.type = 'playback';
     } catch (e) { /* 音が出せない環境でもゲームは続ける */ }
   }
+
+  // 画面に戻ってきたら音を復活させる
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && audioCtx && audioCtx.state !== 'running') {
+      audioCtx.resume().catch(() => {});
+    }
+  });
 
   function unlockSpeech() {
     if (!ttsOn()) return;
@@ -642,18 +650,21 @@
 
   /** 1:太鼓「ドン」— 音程が急に下がる低い音+打った瞬間の「コツ」 */
   function sndDrum(t) {
-    const o = audioCtx.createOscillator();
-    o.type = 'sine';
-    o.frequency.setValueAtTime(230, t);
-    o.frequency.exponentialRampToValueAtTime(70, t + 0.25);
-    out(o, t, 0.9, 0.005, 0.45);
-    o.start(t); o.stop(t + 0.5);
+    // スマホのスピーカーは200Hzより下がほぼ出ないので、少し高めの音から下げて、倍音も重ねる
+    [[1, 'sine', 0.62], [2, 'triangle', 0.28]].forEach(([mul, type, vol]) => {
+      const o = audioCtx.createOscillator();
+      o.type = type;
+      o.frequency.setValueAtTime(320 * mul, t);
+      o.frequency.exponentialRampToValueAtTime(120 * mul, t + 0.2);
+      out(o, t, vol, 0.004, 0.4);
+      o.start(t); o.stop(t + 0.45);
+    });
     const n = noise();
     const f = audioCtx.createBiquadFilter();
-    f.type = 'lowpass'; f.frequency.value = 1200;
+    f.type = 'lowpass'; f.frequency.value = 2000;
     n.connect(f);
-    out(f, t, 0.35, 0.002, 0.05);
-    n.start(t); n.stop(t + 0.08);
+    out(f, t, 0.5, 0.002, 0.06);
+    n.start(t); n.stop(t + 0.1);
   }
 
   /** 2:ベル「チーン」— 金属っぽい倍音を重ねて長く響かせる */
@@ -840,6 +851,8 @@
   function sayNumberNow(i) {
     if (!assistOn()) return;
     if (ttsOn()) {
+      // 練習で押したときに「〇〇さんの番」などの大事な読み上げを消さないようにする
+      if (!myTurnActive && speechSynthesis.speaking) return;
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(NUM_WORDS[i]);
       u.lang = 'ja-JP';
@@ -850,7 +863,7 @@
       showStatus(String(i + 1));
     }
   }
-  function playMiss() { tone(146.8, 0.25, 'sawtooth', 0.2); tone(110, 0.45, 'sawtooth', 0.2, 0.22); }
+  function playMiss() { tone(330, 0.22, 'square', 0.16); tone(247, 0.45, 'square', 0.16, 0.2); }
   function playChime() { tone(880, 0.15, 'sine', 0.25); tone(1318.5, 0.25, 'sine', 0.25, 0.15); }
   function playWin() {
     [523.25, 659.25, 783.99, 1046.5].forEach((f, k) => tone(f, 0.3, 'triangle', 0.3, k * 0.15));
@@ -881,7 +894,7 @@
   // ============================================================
   const SESSION_KEY = 'otoRelaySession';
   function saveSession() {
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ code: code, playerId: myId })); } catch (e) {}
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ code: code, token: myToken })); } catch (e) {}
   }
   function clearSession() {
     try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
@@ -894,6 +907,7 @@
 
   function enterRoom(res) {
     myId = res.playerId;
+    myToken = res.token;
     state = res.state;
     code = state.code;
     lastEventId = state.nextEventId; // 入る前のイベントは読み上げない
@@ -917,7 +931,7 @@
 
   function resetLocal() {
     clearTimeout(pollTimer);
-    code = null; myId = null; state = null;
+    code = null; myId = null; myToken = null; state = null;
     eventQueue.length = 0;
     myTurnActive = false;
     pendingPresses = [];
@@ -971,11 +985,11 @@
   $('resumeBtn').addEventListener('click', async () => {
     unlockAudio(); unlockSpeech();
     const saved = loadSession();
-    if (!saved) { clearSession(); return; }
+    if (!saved || !saved.token) { clearSession(); return; }
     setBusy(true);
     showStatus('前の部屋に戻っています…');
     try {
-      const res = await call('resumeRoom', saved.code, saved.playerId);
+      const res = await call('resumeRoom', saved.code, saved.token);
       enterRoom(res);
       if (myTurnActive) {
         say(`戻りました。${myPos + 1}個目から。`);
@@ -996,7 +1010,7 @@
   });
 
   $('leaveBtn').addEventListener('click', async () => {
-    const c = code, id = myId;
+    const c = code, id = myToken;
     clearSession();
     resetLocal();
     say('退出しました。');
@@ -1006,7 +1020,7 @@
   $('startBtn').addEventListener('click', async () => {
     unlockAudio();
     try {
-      const r = await call('startGame', code, myId);
+      const r = await call('startGame', code, myToken);
       applyState(r.state);
     } catch (e) { say(errMsg(e)); }
   });
@@ -1024,7 +1038,7 @@
     }
     skipArmedUntil = 0;
     try {
-      const r = await call('skipCurrent', code, myId, target);
+      const r = await call('skipCurrent', code, myToken, target);
       applyState(r.state);
       if (r.error === 'turn_changed') say('スキップ取りやめ。');
     } catch (e) { say(errMsg(e)); }
@@ -1032,7 +1046,7 @@
 
   $('lobbyBtn').addEventListener('click', async () => {
     try {
-      const r = await call('backToLobby', code, myId);
+      const r = await call('backToLobby', code, myToken);
       applyState(r.state);
     } catch (e) { say(errMsg(e)); }
   });
@@ -1072,7 +1086,7 @@
     if (!code) return;
     const c = code;
     try {
-      const r = await call('getState', c, state ? state.version : -1, myId);
+      const r = await call('getState', c, state ? state.version : -1, myToken);
       if (code !== c) return;
       if (r.gone) {
         clearSession();
@@ -1244,7 +1258,7 @@
   async function flushPresses() {
     if (sending || pendingPresses.length === 0 || !code) return;
     sending = true;
-    const c = code, id = myId, epoch = syncEpoch;
+    const c = code, id = myToken, epoch = syncEpoch;
     const buttons = pendingPresses;
     const start = pendingStart;
     pendingPresses = [];
@@ -1274,7 +1288,7 @@
     const c = code;
     if (!c) return;
     try {
-      const r = await call('getState', c, -1, myId);
+      const r = await call('getState', c, -1, myToken);
       if (code !== c) return;
       setAway(r.away);
       if (r.changed) applyState(r.state);
@@ -1432,7 +1446,7 @@
   updateBgmBtn();
   (function () {
     const saved = loadSession();
-    if (saved && saved.code) {
+    if (saved && saved.code && saved.token) {
       $('resumeBtn').textContent = `前の部屋(${saved.code})に戻る`;
       $('resumeBtn').hidden = false;
       $('resumeDivider').hidden = false;

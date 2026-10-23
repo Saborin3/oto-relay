@@ -48,12 +48,14 @@ function createRoom(name) {
       turnSerial: 0,              // 番が変わるたびに増える
       winnerId: null,
       events: [],
-      nextEventId: 0
+      nextEventId: 0,
+      secrets: {}                 // 公開IDごとの合言葉(ほかの人には送らない)
     };
+    const token = issueToken_(room, id);
     addEvent_(room, { type: 'join', player: id, name: room.players[0].name, count: 1 });
     save_(room);
     touch_(code, id);
-    return { playerId: id, state: room, away: [] };
+    return { playerId: id, token: token, state: public_(room), away: [] };
   });
 }
 
@@ -73,34 +75,37 @@ function joinRoom(code, name) {
     for (let k = 2; room.players.some(function (p) { return p.name === unique; }); k++) unique = base + k;
     const player = { id: id, name: unique, alive: true };
     room.players.push(player);
+    const token = issueToken_(room, id);
     addEvent_(room, { type: 'join', player: id, name: player.name, count: room.players.length });
     save_(room);
     touch_(code, id);
-    return { playerId: id, state: room, away: awayIds_(room) };
+    return { playerId: id, token: token, state: public_(room), away: awayIds_(room) };
   });
 }
 
 /**
  * 画面を閉じてしまった人が、同じ部屋に戻る。
- * 端末に保存しておいたプレイヤーIDで本人確認する。
+ * 端末に保存しておいた合言葉(token)で本人確認する。
  */
-function resumeRoom(code, playerId) {
+function resumeRoom(code, token) {
   code = normCode_(code);
   const room = load_(code);
   if (!room) throw new Error('前の部屋はもうありません。');
+  const playerId = idOf_(room, token);
   const p = room.players.find(function (q) { return q.id === playerId; });
   if (!p || p.left) throw new Error('前の部屋にはもう戻れません。');
   touch_(code, playerId);
-  return { playerId: playerId, state: room, away: awayIds_(room) };
+  return { playerId: playerId, token: token, state: public_(room), away: awayIds_(room) };
 }
 
 /** ゲームを始める(終了後の「もう一度」もこれ)。ホストが離席中ならほかの人でも始められる。 */
-function startGame(code, playerId) {
+function startGame(code, token) {
   code = normCode_(code);
   return withLock_(function () {
     const room = mustLoad_(code);
+    const playerId = idOf_(room, token);
     claimManage_(room, playerId, 'ゲームを始められるのはホストだけです。');
-    if (room.status === 'playing') return { state: room };
+    if (room.status === 'playing') return { state: public_(room) };
     removeLeftPlayers_(room);
     if (room.players.length < MIN_PLAYERS) throw new Error('2人以上そろうと始められます。');
 
@@ -112,13 +117,13 @@ function startGame(code, playerId) {
     addEvent_(room, { type: 'start' });
     beginTurn_(room);
     save_(room);
-    return { state: room };
+    return { state: public_(room) };
   });
 }
 
 /** ボタンを1つ押す(互換用)。 */
-function press(code, playerId, button, pos) {
-  return pressBatch(code, playerId, pos, [button]);
+function press(code, token, button, pos) {
+  return pressBatch(code, token, pos, [button]);
 }
 
 /**
@@ -126,7 +131,7 @@ function press(code, playerId, button, pos) {
  * pos は buttons[0] が「何個目のボタンか」(0始まり)。通信の順番が入れ替わったときに気づくため。
  * 通信中に押されたボタンをまとめて送れるので、速く押しても遅れがたまらない。
  */
-function pressBatch(code, playerId, pos, buttons) {
+function pressBatch(code, token, pos, buttons) {
   code = normCode_(code);
   pos = Number(pos);
   if (!Array.isArray(buttons) || buttons.length === 0 || buttons.length > MAX_BATCH) {
@@ -139,11 +144,12 @@ function pressBatch(code, playerId, pos, buttons) {
 
   return withLock_(function () {
     const room = mustLoad_(code);
+    const playerId = idOf_(room, token);
     touch_(code, playerId);
-    if (room.status !== 'playing') return { error: 'not_playing', state: room };
+    if (room.status !== 'playing') return { error: 'not_playing', state: public_(room) };
     const cur = room.players[room.turnIndex];
-    if (!cur || cur.id !== playerId) return { error: 'not_your_turn', state: room };
-    if (pos !== room.inputPos) return { error: 'out_of_sync', state: room };
+    if (!cur || cur.id !== playerId) return { error: 'not_your_turn', state: public_(room) };
+    if (pos !== room.inputPos) return { error: 'out_of_sync', state: public_(room) };
 
     const serial = room.turnSerial;
     for (let k = 0; k < buttons.length && room.turnSerial === serial && room.status === 'playing'; k++) {
@@ -168,7 +174,7 @@ function pressBatch(code, playerId, pos, buttons) {
       }
     }
     save_(room);
-    return { state: room };
+    return { state: public_(room) };
   });
 }
 
@@ -176,15 +182,16 @@ function pressBatch(code, playerId, pos, buttons) {
  * 今の番の人をスキップ(脱落扱い)にする。
  * ホストはいつでも、ほかの人は「今の番の人」か「ホスト」が離席しているときだけできる。
  */
-function skipCurrent(code, playerId, targetId) {
+function skipCurrent(code, token, targetId) {
   code = normCode_(code);
   return withLock_(function () {
     const room = mustLoad_(code);
+    const playerId = idOf_(room, token);
     requireMember_(room, playerId);
-    if (room.status !== 'playing') return { state: room };
+    if (room.status !== 'playing') return { state: public_(room) };
     const cur = room.players[room.turnIndex];
     // 押している間に番が変わっていたら、別の人をスキップしないよう取りやめる
-    if (targetId && cur.id !== targetId) return { error: 'turn_changed', state: room };
+    if (targetId && cur.id !== targetId) return { error: 'turn_changed', state: public_(room) };
     const away = awayIds_(room);
     const allowed = room.hostId === playerId
       || away.indexOf(room.hostId) >= 0
@@ -196,15 +203,16 @@ function skipCurrent(code, playerId, targetId) {
     addEvent_(room, { type: 'miss', player: cur.id, reason: 'skip' });
     advance_(room);
     save_(room);
-    return { state: room };
+    return { state: public_(room) };
   });
 }
 
 /** 待機状態に戻す。ホストが離席中ならほかの人でもできる。 */
-function backToLobby(code, playerId) {
+function backToLobby(code, token) {
   code = normCode_(code);
   return withLock_(function () {
     const room = mustLoad_(code);
+    const playerId = idOf_(room, token);
     claimManage_(room, playerId, '待機に戻せるのはホストだけです。');
     removeLeftPlayers_(room);
     room.status = 'waiting';
@@ -215,16 +223,18 @@ function backToLobby(code, playerId) {
     room.players.forEach(function (p) { p.alive = true; });
     addEvent_(room, { type: 'reset' });
     save_(room);
-    return { state: room };
+    return { state: public_(room) };
   });
 }
 
 /** 部屋を出る。 */
-function leaveRoom(code, playerId) {
+function leaveRoom(code, token) {
   code = normCode_(code);
   return withLock_(function () {
     const room = load_(code);
     if (!room) return { ok: true };
+    const playerId = findId_(room, token);
+    if (!playerId) return { ok: true };
     const idx = room.players.findIndex(function (p) { return p.id === playerId; });
     if (idx < 0) return { ok: true };
     const p = room.players[idx];
@@ -244,6 +254,7 @@ function leaveRoom(code, playerId) {
       }
     } else {
       room.players.splice(idx, 1);
+      delete room.secrets[playerId];
       room.turnIndex = 0;
       addEvent_(room, { type: 'leave', player: p.id, name: p.name });
     }
@@ -263,14 +274,15 @@ function leaveRoom(code, playerId) {
  * 状態を取る。knownVersion と同じなら中身は返さない(通信量を減らすため)。
  * playerId を渡すと「まだここにいる」と記録する。away は離席中の人のID一覧。
  */
-function getState(code, knownVersion, playerId) {
+function getState(code, knownVersion, token) {
   code = normCode_(code);
   const room = load_(code);
   if (!room) return { gone: true };
+  const playerId = findId_(room, token);
   if (playerId) touch_(code, playerId);
   const away = awayIds_(room);
   if (room.version === knownVersion) return { changed: false, away: away };
-  return { changed: true, state: room, away: away };
+  return { changed: true, state: public_(room), away: away };
 }
 
 // ============================================================
@@ -324,6 +336,38 @@ function removeLeftPlayers_(room) {
 // ============================================================
 // 参加者のチェック・離席の判定
 // ============================================================
+
+/** 合言葉を発行する。 */
+function issueToken_(room, id) {
+  if (!room.secrets) room.secrets = {};
+  const token = Utilities.getUuid();
+  room.secrets[id] = token;
+  return token;
+}
+
+/** 合言葉から公開IDを探す(見つからなければ null)。 */
+function findId_(room, token) {
+  if (!token || !room.secrets) return null;
+  const ids = Object.keys(room.secrets);
+  for (let i = 0; i < ids.length; i++) {
+    if (room.secrets[ids[i]] === token) return ids[i];
+  }
+  return null;
+}
+
+/** 合言葉から公開IDを探す(見つからなければエラー)。 */
+function idOf_(room, token) {
+  const id = findId_(room, token);
+  if (!id) throw new Error('この部屋の参加者ではありません。');
+  return id;
+}
+
+/** クライアントに送る用に、合言葉を取り除いたコピーを作る。 */
+function public_(room) {
+  const copy = Object.assign({}, room);
+  delete copy.secrets;
+  return copy;
+}
 
 function requireMember_(room, playerId) {
   const ok = room.players.some(function (p) { return p.id === playerId && !p.left; });

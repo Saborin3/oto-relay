@@ -262,6 +262,11 @@
     box-shadow: 0 0 24px -4px rgba(255, 200, 80, .9);
   }
   .chip.is-win::before { content: "★"; }
+  /* ホストが押せるチップ(押すと退出させる) */
+  .chip.kickable { cursor: pointer; font: inherit; color: inherit; font-size: .88rem; font-weight: 700; }
+  .chip.kickable::after { content: "×"; margin-left: 2px; opacity: .55; font-size: .9rem; }
+  .chip.kickable.armed { border-color: #ff8a8a; color: #ffb3b3; box-shadow: 0 0 0 2px rgba(255, 120, 120, .35); }
+  .chip.kickable.armed::after { opacity: 1; }
 
   /* 何個押したかのドット */
   .dots {
@@ -274,6 +279,7 @@
   .dots b { font-family: var(--num); font-size: .75rem; color: var(--muted); margin-left: 2px; }
 
   #startBtn, #introSkipBtn { order: 4; padding: 13px; font-size: 1.05rem; }
+  #rulesBtn { order: 4; padding: 10px; font-size: .95rem; margin-top: -2px; }
 
   /* ===== 4つのボタン ===== */
   #padH { margin: 0; }
@@ -288,6 +294,7 @@
   }
   .pad button {
     --c: var(--c0);
+    container-type: size; /* 中の文字をボタンの大きさに合わせる */
     position: relative;
     min-height: 0;
     border: 1px solid rgba(255, 255, 255, .2);
@@ -307,10 +314,15 @@
   .pad .b3 { --c: var(--c3); }
   .pad .num {
     font-family: var(--num); font-weight: 800;
-    font-size: clamp(2.2rem, 9vh, 4.6rem); line-height: 1;
+    font-size: clamp(1.4rem, 48cqh, 4.6rem); line-height: 1;
     text-shadow: 0 2px 12px rgba(0, 0, 0, .25);
   }
-  .pad .note { font-size: clamp(.8rem, 2.2vh, 1rem); font-weight: 700; letter-spacing: .1em; opacity: .9; }
+  .pad .note { font-size: clamp(.72rem, 16cqh, 1rem); font-weight: 700; letter-spacing: .1em; opacity: .9; }
+  /* ボタンが低いときも、番号と音の名前が両方収まるようにする */
+  @container (max-height: 96px) {
+    .pad .num { font-size: 44cqh; }
+    .pad .note { font-size: 20cqh; letter-spacing: .02em; }
+  }
   .pad button:active { transform: scale(.96); }
   .pad button.lit {
     transform: scale(.95);
@@ -437,6 +449,7 @@
 
     <button class="btn primary" id="startBtn" hidden>ゲーム開始</button>
     <button class="btn" id="introSkipBtn" hidden>音の確認をスキップ</button>
+    <button class="btn" id="rulesBtn" hidden>ルールを聞く</button>
 
     <h2 id="padH" class="sr">ボタン</h2>
     <div class="pad" role="group" aria-labelledby="padH">
@@ -511,6 +524,7 @@
   let skipArmedUntil = 0; // スキップの「もう一度押して決定」の期限
   let skipTarget = null;  // スキップしようとしている人
   const eventQueue = [];
+  let roomEpoch = 0;      // 部屋に入るたび・出るたびに増やす(前の部屋の読み上げを続けないため)
   let queueRunning = false;
 
   // ============================================================
@@ -932,6 +946,7 @@
   }
 
   function enterRoom(res) {
+    roomEpoch++;
     myId = res.playerId;
     myToken = res.token;
     state = res.state;
@@ -953,9 +968,12 @@
     $('roomH').focus();
     bgmStart();
     schedulePoll(POLL_MS);
+    // この端末で一度もルールを聞いていなければ、入室のあいさつのあとに1回だけ流す
+    if (state.status !== 'playing' && !rulesHeard()) setTimeout(queueRules, 0);
   }
 
   function resetLocal() {
+    roomEpoch++;
     clearTimeout(pollTimer);
     code = null; myId = null; myToken = null; state = null;
     eventQueue.length = 0;
@@ -966,6 +984,7 @@
     speakingCount = 0;
     introSkipped = true;
     $('introSkipBtn').hidden = true;
+    rulesStopped = true;
     if ('speechSynthesis' in window) speechSynthesis.cancel(); // 前の部屋の読み上げを止める
     $('room').hidden = true;
     $('lobby').hidden = false;
@@ -1144,7 +1163,16 @@
   function applyState(s) {
     if (!s || !code || s.code !== code) return;
     if (state && s.version <= state.version) return; // 古い状態は無視
+    const me = s.players.find((p) => p.id === myId);
+    if (!me || me.left) {
+      // ホストに退出させられた
+      clearSession();
+      resetLocal();
+      say('ホストに退出させられました。');
+      return;
+    }
     state = s;
+    if (s.status === 'playing' && rulesRunning) stopRules();
     const fresh = s.events.filter((e) => e.id > lastEventId);
     if (fresh.length) lastEventId = fresh[fresh.length - 1].id;
     fresh.forEach((e) => eventQueue.push(e));
@@ -1160,12 +1188,12 @@
     queueRunning = true;
     while (eventQueue.length) {
       const e = eventQueue.shift();
-      try { await handleEvent(e); } catch (err) { console.error(err); }
+      try { await handleEvent(e, roomEpoch); } catch (err) { console.error(err); }
     }
     queueRunning = false;
   }
 
-  async function handleEvent(e) {
+  async function handleEvent(e, ep) {
     switch (e.type) {
       case 'join':
         if (e.player !== myId) {
@@ -1175,13 +1203,13 @@
         break;
 
       case 'leave':
-        if (e.player !== myId) await speakAsync(`${e.name}さん退出。`);
+        if (e.player !== myId) await speakAsync(e.kicked ? `${e.name}さんを退出させました。` : `${e.name}さん退出。`);
         break;
 
       case 'start':
         playChime();
         await speakAsync('スタート');
-        if (introOn()) await playIntro();
+        if (introOn() && ep === roomEpoch) await playIntro(ep);
         break;
 
       case 'press':
@@ -1240,11 +1268,72 @@
           : '終了。');
         break;
 
+      case 'rules':
+        await playRules(ep);
+        break;
+
       case 'reset':
         await speakAsync('待機中。');
         break;
     }
   }
+
+  // ============================================================
+  // ルールの説明(待機中だけ。初めての端末では自動で1回流す)
+  // ============================================================
+  const RULES = [
+    'ルール。',
+    '4つのボタンに、太鼓、ベル、手拍子、笛の音がある。',
+    '自分の番が来たら、前の人までの音を順番に押して、最後に好きな音をひとつ足す。',
+    '間違えたら脱落。最後まで残った人の勝ち。'
+  ];
+  let rulesRunning = false;
+  let rulesStopped = false;
+
+  function rulesHeard() {
+    try { return localStorage.getItem('otoRelayRulesHeard') === '1'; } catch (e) { return false; }
+  }
+
+  /** ルールを読み上げの列の先頭に入れる(ほかのお知らせはルールのあとに読む)。 */
+  function queueRules() {
+    if (!code || rulesRunning || eventQueue.some((e) => e.type === 'rules')) return;
+    eventQueue.unshift({ type: 'rules' });
+    runQueue();
+  }
+
+  async function playRules(ep) {
+    if (!state || state.status === 'playing' || ep !== roomEpoch) return;
+    rulesRunning = true;
+    rulesStopped = false;
+    render();
+    try {
+      for (let k = 0; k < RULES.length && !rulesStopped && ep === roomEpoch; k++) {
+        await speakAsync(RULES[k]);
+      }
+      if (!rulesStopped && ep === roomEpoch) {
+        try { localStorage.setItem('otoRelayRulesHeard', '1'); } catch (e) {}
+      }
+    } finally {
+      rulesRunning = false;
+      if (code) render();
+    }
+  }
+
+  function stopRules() {
+    if (!rulesRunning) return;
+    rulesStopped = true;
+    if (ttsOn()) speechSynthesis.cancel();
+  }
+
+  $('rulesBtn').addEventListener('click', () => {
+    unlockAudio();
+    if (rulesRunning) {
+      stopRules();
+      showStatus('ルールを止めました。');
+    } else {
+      queueRules();
+    }
+  });
 
   // ============================================================
   // はじめの音の確認(スキップできる)
@@ -1254,19 +1343,19 @@
 
   function introOn() { return $('introToggle').checked; }
 
-  async function playIntro() {
+  async function playIntro(ep) {
     introRunning = true;
     introSkipped = false;
     $('introSkipBtn').hidden = false;
     try {
       await speakAsync('音の確認。');
-      for (let i = 0; i < 4 && !introSkipped && code; i++) {
+      for (let i = 0; i < 4 && !introSkipped && ep === roomEpoch; i++) {
         await speakAsync(`${NUM_WORDS[i]}、${NOTE_NAMES[i]}。`);
-        if (introSkipped) break;
+        if (introSkipped || ep !== roomEpoch) break;
         playButton(i);
         await wait(800);
       }
-      if (!introSkipped) await speakAsync('確認おわり。');
+      if (!introSkipped && ep === roomEpoch) await speakAsync('確認おわり。');
     } finally {
       introRunning = false;
       $('introSkipBtn').hidden = true;
@@ -1416,10 +1505,21 @@
     const ul = $('playerList');
     ul.innerHTML = '';
     const cur = currentId();
+    const canKick = isHost() || away.includes(state.hostId);
     state.players.forEach((p) => {
       if (p.left && state.status === 'waiting') return;
-      const li = document.createElement('li');
+      const item = document.createElement('li');
+      // ホストは、自分以外の人のチップを押すと退出させられる
+      const kickable = canKick && p.id !== myId && !p.left;
+      const li = document.createElement(kickable ? 'button' : 'span');
       li.className = 'chip';
+      if (kickable) {
+        li.classList.add('kickable');
+        li.dataset.id = p.id;
+        if (kickArmed.id === p.id && Date.now() < kickArmed.until) li.classList.add('armed');
+        li.addEventListener('click', () => onKick(p.id));
+      }
+      item.append(li);
       if (p.id === myId) li.classList.add('is-me');
       if (p.id === cur) li.classList.add('is-turn');
       if (state.status !== 'waiting' && !p.alive) li.classList.add('is-out');
@@ -1449,8 +1549,35 @@
         }
         li.append(s);
       });
-      ul.append(li);
+      if (kickable) {
+        const s = document.createElement('span');
+        s.className = 'sr';
+        s.textContent = '、押すと退出させる';
+        li.append(s);
+      }
+      ul.append(item);
     });
+  }
+
+  // ============================================================
+  // 強制退出(ホストだけ。2回押して決定)
+  // ============================================================
+  let kickArmed = { id: null, until: 0 };
+
+  async function onKick(targetId) {
+    const now = Date.now();
+    if (kickArmed.id !== targetId || now > kickArmed.until) {
+      kickArmed = { id: targetId, until: now + 4000 };
+      render();
+      say(`${nameOf(targetId)}さんを退出させる。もう一度押すと決定。`);
+      setTimeout(() => { if (Date.now() >= kickArmed.until) render(); }, 4100);
+      return;
+    }
+    kickArmed = { id: null, until: 0 };
+    try {
+      const r = await call('kickPlayer', code, myToken, targetId);
+      if (r && r.state) applyState(r.state);
+    } catch (e) { say(errMsg(e)); }
   }
 
   /** 覚える数をドットで表示する(自分の番は押した分が光る)。 */
@@ -1499,6 +1626,8 @@
       ? 'もう一度ゲーム開始'
       : (activeCount < 2 ? 'あと1人そろうと開始できます' : 'ゲーム開始');
     $('skipBtn').hidden = !playing || !(host || away.includes(currentId()));
+    $('rulesBtn').hidden = playing;
+    $('rulesBtn').textContent = rulesRunning ? 'ルールを止める' : 'ルールを聞く';
     $('lobbyBtn').hidden = !host || state.status === 'waiting';
   }
 

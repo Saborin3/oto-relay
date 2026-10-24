@@ -235,39 +235,65 @@ function leaveRoom(code, token) {
     if (!room) return { ok: true };
     const playerId = findId_(room, token);
     if (!playerId) return { ok: true };
-    const idx = room.players.findIndex(function (p) { return p.id === playerId; });
-    if (idx < 0) return { ok: true };
-    const p = room.players[idx];
-    if (p.left) return { ok: true };
-
-    if (room.status === 'playing') {
-      // ゲーム中は順番が崩れないよう、リストに残したまま退出扱いにする
-      const wasCurrent = idx === room.turnIndex;
-      const wasAlive = p.alive;
-      p.alive = false;
-      p.left = true;
-      addEvent_(room, { type: 'leave', player: p.id, name: p.name });
-      if (wasCurrent && wasAlive) {
-        advance_(room);
-      } else if (aliveCount_(room) <= 1) {
-        finish_(room);
-      }
-    } else {
-      room.players.splice(idx, 1);
-      delete room.secrets[playerId];
-      room.turnIndex = 0;
-      addEvent_(room, { type: 'leave', player: p.id, name: p.name });
-    }
-
-    const remaining = room.players.filter(function (q) { return !q.left; });
-    if (remaining.length === 0) {
-      cache_().remove(key_(code));
-      return { ok: true };
-    }
-    if (room.hostId === playerId) room.hostId = remaining[0].id;
-    save_(room);
+    removePlayer_(room, playerId, false);
     return { ok: true };
   });
+}
+
+/**
+ * ホストがほかの人を強制的に退出させる。
+ * ホストが離席中なら、ほかの人でもできる(操作した人がホストになる)。
+ */
+function kickPlayer(code, token, targetId) {
+  code = normCode_(code);
+  return withLock_(function () {
+    const room = mustLoad_(code);
+    const playerId = idOf_(room, token);
+    claimManage_(room, playerId, '退出させられるのはホストだけです。');
+    if (targetId === playerId) throw new Error('自分は退出させられません。「退出」ボタンを使ってください。');
+    const target = room.players.find(function (p) { return p.id === targetId; });
+    if (!target || target.left) return { state: public_(room) };
+    removePlayer_(room, targetId, true);
+    const after = load_(code);
+    return { state: after ? public_(after) : null };
+  });
+}
+
+/** 部屋から1人取り除く(自分で出る・退出させられる の共通処理)。保存までする。 */
+function removePlayer_(room, playerId, kicked) {
+  const idx = room.players.findIndex(function (p) { return p.id === playerId; });
+  if (idx < 0) return;
+  const p = room.players[idx];
+  if (p.left) return;
+  // 合言葉を消して、その人の端末からは操作できないようにする
+  if (room.secrets) delete room.secrets[playerId];
+  const ev = { type: 'leave', player: p.id, name: p.name, kicked: !!kicked };
+
+  if (room.status === 'playing') {
+    // ゲーム中は順番が崩れないよう、リストに残したまま退出扱いにする
+    const wasCurrent = idx === room.turnIndex;
+    const wasAlive = p.alive;
+    p.alive = false;
+    p.left = true;
+    addEvent_(room, ev);
+    if (wasCurrent && wasAlive) {
+      advance_(room);
+    } else if (aliveCount_(room) <= 1) {
+      finish_(room);
+    }
+  } else {
+    room.players.splice(idx, 1);
+    room.turnIndex = 0;
+    addEvent_(room, ev);
+  }
+
+  const remaining = room.players.filter(function (q) { return !q.left; });
+  if (remaining.length === 0) {
+    cache_().remove(key_(room.code));
+    return;
+  }
+  if (room.hostId === playerId) room.hostId = remaining[0].id;
+  save_(room);
 }
 
 /**

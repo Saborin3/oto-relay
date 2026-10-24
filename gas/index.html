@@ -330,6 +330,7 @@
     box-shadow: 0 0 0 3px rgba(255, 255, 255, .9), 0 0 55px 6px var(--c);
   }
   .app.is-playing:not(.my-turn) .pad button { opacity: .55; }
+  .app.replaying .pad button { cursor: default; }
   .app.my-turn .pad button { box-shadow: 0 0 0 2px rgba(255, 255, 255, .35), 0 16px 40px -12px var(--c); }
 
   .pad-hint { order: 6; margin: -2px 0 0; text-align: center; font-size: .74rem; color: var(--muted); letter-spacing: .04em; }
@@ -1242,23 +1243,37 @@
         break;
       }
 
-      case 'turn':
-        if (e.player === myId) {
-          // 最新の状態でもまだ自分の番なら、押せるようにする
-          if (currentId() === myId && state.turnSerial === e.serial) {
-            myTurnActive = true;
-            myPos = 0;
-            localMissed = false;
-            pendingPresses = [];
-            render();
+      case 'turn': {
+        const mine = e.player === myId;
+        const stillMyTurn = () => ep === roomEpoch && currentId() === myId && state.turnSerial === e.serial;
+        if (mine && !stillMyTurn()) break; // もう番が変わっていたら何もしない
+
+        if (e.length === 0) {
+          // 最初の1個は覚える音がないので、すぐ押せる
+          if (mine) {
+            startMyTurn();
             playChime();
             await wait(350);
-            await speakAsync(e.length === 0 ? 'あなたの番。好きな音をひとつ。' : `あなたの番。${e.length}個。`);
+            await speakAsync('あなたの番。好きな音をひとつ。');
+          } else {
+            await speakAsync(`${nameOf(e.player)}さんの番。`);
           }
-        } else {
-          await speakAsync(`${nameOf(e.player)}さんの番。`);
+          break;
+        }
+
+        await speakAsync(mine ? `あなたの番。${e.length}個。` : `${nameOf(e.player)}さんの番。`);
+        // 押した人の速さに関係なく、同じテンポでもう一度鳴らす(おさらい)
+        await replaySequence(state.sequence.slice(0, e.length), ep);
+        if (mine) {
+          // すぐ押せるとヒントになりすぎるので、3秒あけてから押せるようにする
+          await wait(REPLAY_GAP_MS);
+          if (!stillMyTurn()) break;
+          startMyTurn();
+          playChime();
+          await speakAsync('どうぞ。');
         }
         break;
+      }
 
       case 'win':
         playWin();
@@ -1284,7 +1299,8 @@
   const RULES = [
     'ルール。',
     '4つのボタンに、太鼓、ベル、手拍子、笛の音がある。',
-    '自分の番が来たら、前の人までの音を順番に押して、最後に好きな音をひとつ足す。',
+    '番が変わるたびに、それまでの音がもう一度流れる。',
+    '自分の番では、「どうぞ」の合図のあと、同じ順番で押して、最後に好きな音をひとつ足す。',
     '間違えたら脱落。最後まで残った人の勝ち。'
   ];
   let rulesRunning = false;
@@ -1336,6 +1352,43 @@
   });
 
   // ============================================================
+  // おさらい(番が変わるたびに、それまでの音を同じテンポで鳴らし直す)
+  // ============================================================
+  const REPLAY_STEP_MS = 650;   // 1つの音の間隔
+  const REPLAY_GAP_MS = 3000;   // おさらいのあと、押せるようになるまでの時間
+
+  let replaying = false;
+
+  async function replaySequence(seq, ep) {
+    replaying = true;
+    $('app').classList.add('replaying');
+    try {
+      await wait(400);
+      for (let k = 0; k < seq.length && ep === roomEpoch; k++) {
+        playButton(seq[k]);
+        if (assistOn()) {
+          await wait(300);
+          await speakAsync(NUM_WORDS[seq[k]]);
+          await wait(150);
+        } else {
+          await wait(REPLAY_STEP_MS);
+        }
+      }
+    } finally {
+      replaying = false;
+      $('app').classList.remove('replaying');
+    }
+  }
+
+  function startMyTurn() {
+    myTurnActive = true;
+    myPos = 0;
+    localMissed = false;
+    pendingPresses = [];
+    render();
+  }
+
+  // ============================================================
   // はじめの音の確認(スキップできる)
   // ============================================================
   let introRunning = false;
@@ -1375,6 +1428,8 @@
   // ============================================================
   function onPad(i) {
     unlockAudio();
+    // おさらい中は、自分の練習の音が混ざらないように鳴らさない
+    if (replaying) return;
     playButton(i);
     sayNumberNow(i);
 
